@@ -18,8 +18,8 @@ export function GameCard({ game }: GameCardProps) {
   const isFinal = game.status === 'FINAL';
   
   // Determine winner for final games
-  const homeWins = isFinal && game.homeScore > game.awayScore;
-  const awayWins = isFinal && game.awayScore > game.homeScore;
+  const homeWins = isFinal && (game.homeScore ?? 0) > (game.awayScore ?? 0);
+  const awayWins = isFinal && (game.awayScore ?? 0) > (game.homeScore ?? 0);
 
   return (
     <Link href={`/games/${game.id}`}>

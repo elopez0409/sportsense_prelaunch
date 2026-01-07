@@ -141,6 +141,91 @@ export interface AIGameContext {
 }
 
 // API Response types
+export type BDLTeam = NbaApiTeam;
+export type BDLPlayer = NbaApiPlayer;
+export type BDLGame = NbaApiGame;
+
+export interface BDLStats {
+  id: number;
+  min: string;
+  fgm: number;
+  fga: number;
+  fg3m: number;
+  fg3a: number;
+  ftm: number;
+  fta: number;
+  oreb: number;
+  dreb: number;
+  reb: number;
+  ast: number;
+  stl: number;
+  blk: number;
+  turnover: number;
+  pf: number;
+  pts: number;
+  player: BDLPlayer;
+  team: BDLTeam;
+  game: BDLGame;
+}
+
+export interface BDLPaginatedResponse<T> {
+  data: T[];
+  meta: {
+    total_pages: number;
+    current_page: number;
+    next_page: number | null;
+    per_page: number;
+    total_count: number;
+  };
+}
+
+export interface NBAStatsResponse<T> {
+  resource: string;
+  parameters: Record<string, unknown>;
+  resultSets: {
+    name: string;
+    headers: string[];
+    rowSet: (string | number | null)[][];
+  }[];
+}
+
+export interface NBAStatsPlayByPlay {
+  game_id: string;
+  eventNum: number;
+  eventMsgType: number;
+  eventMsgActionType: number;
+  period: number;
+  wcTimeString: string;
+  pcTimeString: string;
+  homedescription: string | null;
+  neutraldescription: string | null;
+  visitordescription: string | null;
+  score: string | null;
+  scoreMargin: string | null;
+  person1Type: number;
+  player1Id: number;
+  player1Name: string;
+  player1TeamId: number;
+  player1TeamCity: string;
+  player1TeamNickname: string;
+  player1TeamAbbreviation: string;
+  person2Type: number;
+  player2Id: number;
+  player2Name: string;
+  player2TeamId: number;
+  player2TeamCity: string;
+  player2TeamNickname: string;
+  player2TeamAbbreviation: string;
+  person3Type: number;
+  player3Id: number;
+  player3Name: string;
+  player3TeamId: number;
+  player3TeamCity: string;
+  player3TeamNickname: string;
+  player3TeamAbbreviation: string;
+  videoAvailableFlag: number;
+}
+
 export interface NbaApiTeam {
   id: number;
   abbreviation: string;
