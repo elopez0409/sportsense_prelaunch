@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
         success: false,
         error: {
           code: 'INVALID_REQUEST',
-          message: parsed.error.errors[0].message,
+          message: parsed.error.issues[0].message,
         },
       }, { status: 400 });
     }
