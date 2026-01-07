@@ -80,7 +80,7 @@ export function formatGameClock(period: number, clock: string | null): string {
  */
 export function formatGameStatus(
   status: string,
-  period: number,
+  period: number | null,
   gameClock: string | null,
   scheduledAt: Date | string
 ): string {
@@ -88,11 +88,11 @@ export function formatGameStatus(
     case 'SCHEDULED':
       return formatTime(scheduledAt);
     case 'LIVE':
-      return formatGameClock(period, gameClock);
+      return formatGameClock(period ?? 0, gameClock);
     case 'HALFTIME':
       return 'Halftime';
     case 'FINAL':
-      return period > 4 ? `Final/OT${period - 4}` : 'Final';
+      return period && period > 4 ? `Final/OT${period - 4}` : 'Final';
     case 'POSTPONED':
       return 'Postponed';
     case 'CANCELLED':
