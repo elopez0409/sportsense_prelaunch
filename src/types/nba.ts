@@ -41,6 +41,17 @@ export interface PlayEvent {
   playerId?: string;
 }
 
+export interface PlayerInfo {
+  id: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  position: string | null;
+  jerseyNumber: string | null;
+  team: TeamInfo | null;
+  headshotUrl: string | null;
+}
+
 export interface PlayerStats {
   playerId: string;
   playerName: string;
@@ -131,4 +142,15 @@ export interface NbaApiGame {
   status: string;
   time: string;
   postseason: boolean;
+}
+
+// Generic API Response type
+export interface APIResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: {
+    code: string;
+    message: string;
+  };
+  meta?: Record<string, unknown>;
 }

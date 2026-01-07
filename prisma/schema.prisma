@@ -1,12 +1,12 @@
 // SportSense V2 - Production NBA Data Schema
-// SQLite + Prisma ORM (development)
+// PostgreSQL (Neon) + Prisma ORM
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
