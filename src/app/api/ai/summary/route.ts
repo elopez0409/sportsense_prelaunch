@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
       update: {
         content: response.text,
         modelUsed: response.model,
-        dataSnapshot: {},
+        dataSnapshot: JSON.stringify({}),
         promptUsed: type,
         generatedAt: new Date(),
       },
@@ -180,7 +180,7 @@ export async function POST(request: NextRequest) {
         summaryType: summaryTypeMap[type],
         content: response.text,
         modelUsed: response.model,
-        dataSnapshot: {},
+        dataSnapshot: JSON.stringify({}),
         promptUsed: type,
       },
     });
