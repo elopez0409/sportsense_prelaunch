@@ -326,7 +326,7 @@ export function GameAnalytics({
                       cy="50%"
                       innerRadius={40}
                       outerRadius={60}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                       labelLine={false}
                     >
                       <Cell fill="#F97316" />
@@ -353,7 +353,7 @@ export function GameAnalytics({
                       cy="50%"
                       innerRadius={40}
                       outerRadius={60}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                       labelLine={false}
                     >
                       <Cell fill="#3B82F6" />
