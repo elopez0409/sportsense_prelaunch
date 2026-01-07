@@ -190,40 +190,8 @@ export interface NBAStatsResponse<T> {
 }
 
 export interface NBAStatsPlayByPlay {
-  game_id: string;
-  eventNum: number;
-  eventMsgType: number;
-  eventMsgActionType: number;
-  period: number;
-  wcTimeString: string;
-  pcTimeString: string;
-  homedescription: string | null;
-  neutraldescription: string | null;
-  visitordescription: string | null;
-  score: string | null;
-  scoreMargin: string | null;
-  person1Type: number;
-  player1Id: number;
-  player1Name: string;
-  player1TeamId: number;
-  player1TeamCity: string;
-  player1TeamNickname: string;
-  player1TeamAbbreviation: string;
-  person2Type: number;
-  player2Id: number;
-  player2Name: string;
-  player2TeamId: number;
-  player2TeamCity: string;
-  player2TeamNickname: string;
-  player2TeamAbbreviation: string;
-  person3Type: number;
-  player3Id: number;
-  player3Name: string;
-  player3TeamId: number;
-  player3TeamCity: string;
-  player3TeamNickname: string;
-  player3TeamAbbreviation: string;
-  videoAvailableFlag: number;
+  gameId: string;
+  actions: Record<string, any>[];
 }
 
 export interface NbaApiTeam {
