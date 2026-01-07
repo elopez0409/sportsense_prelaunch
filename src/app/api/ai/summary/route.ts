@@ -38,7 +38,7 @@ async function buildGameContext(gameId: string): Promise<AIGameContext | null> {
   const awayStats = game.playerStats.filter((s) => s.teamId === game.awayTeamId);
 
   const getLeader = (stats: typeof homeStats, stat: 'points' | 'reb' | 'ast') => {
-    if (stats.length === 0) return null;
+    if (stats.length === 0) return undefined;
     const leader = stats.reduce((max, s) => (s[stat] > max[stat] ? s : max));
     return { player: leader.player.fullName, value: leader[stat] };
   };
