@@ -15,6 +15,7 @@ export interface GameLeaderStat {
 
 export interface LiveGameData {
   gameId: string;
+  gameDate?: string;
   homeTeam: {
     name: string;
     abbreviation: string;
@@ -307,6 +308,7 @@ export async function fetchLiveScores(): Promise<LiveDataResponse> {
 
         games.push({
           gameId: event.id,
+          gameDate: event.date || competition?.date || data.day?.date,
           homeTeam: homeTeamData,
           awayTeam: awayTeamData,
           status: gameStatus,
@@ -382,6 +384,7 @@ export async function fetchScoresByDate(dateStr: string): Promise<LiveDataRespon
 
         games.push({
           gameId: event.id,
+          gameDate: event.date || data.day?.date,
           homeTeam: {
             name: homeComp?.team?.displayName || 'Unknown',
             abbreviation: homeComp?.team?.abbreviation || '???',
@@ -842,7 +845,7 @@ export interface GameBoxscore {
 }
 
 // Fetch detailed boxscore for a specific game
-async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | null> {
+export async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | null> {
   const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`;
   
   try {
@@ -1217,4 +1220,3 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
 
   return lines.join('\n');
 }
-
