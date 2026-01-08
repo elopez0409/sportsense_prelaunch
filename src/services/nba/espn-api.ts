@@ -780,10 +780,40 @@ export async function fetchTeamDetail(teamId: string): Promise<ESPNTeamDetail | 
     const record = team.record?.items?.[0];
     const stats = record?.stats || [];
 
-    // Parse stats
-    const getStatValue = (name: string) => {
-      const stat = stats.find((s: any) => s.name === name);
-      return parseFloat(stat?.value || '0');
+    // Also try to get stats from team.statistics or team.stats
+    const allStats = [
+      ...stats,
+      ...(team.statistics || []),
+      ...(team.stats || []),
+      ...(record?.statistics || []),
+    ];
+
+    // Parse stats with multiple name variations
+    const getStatValue = (names: string | string[]) => {
+      const nameArray = Array.isArray(names) ? names : [names];
+      for (const name of nameArray) {
+        // Try exact match
+        let stat = allStats.find((s: any) => 
+          s.name?.toLowerCase() === name.toLowerCase() ||
+          s.displayName?.toLowerCase() === name.toLowerCase() ||
+          s.abbreviation?.toLowerCase() === name.toLowerCase()
+        );
+        if (stat) {
+          const value = parseFloat(stat.value || stat.displayValue || '0');
+          if (value > 0) return value;
+        }
+        
+        // Try partial match
+        stat = allStats.find((s: any) => 
+          s.name?.toLowerCase().includes(name.toLowerCase()) ||
+          s.displayName?.toLowerCase().includes(name.toLowerCase())
+        );
+        if (stat) {
+          const value = parseFloat(stat.value || stat.displayValue || '0');
+          if (value > 0) return value;
+        }
+      }
+      return 0;
     };
 
     // Parse roster (basic info)
@@ -821,6 +851,65 @@ export async function fetchTeamDetail(teamId: string): Promise<ESPNTeamDetail | 
       }
     }
 
+    // Try to fetch team stats from a dedicated stats endpoint if main stats are missing
+    let teamStats = {
+      ppg: getStatValue(['avgPointsFor', 'pointsFor', 'points per game', 'ppg', 'avg points']),
+      oppg: getStatValue(['avgPointsAgainst', 'pointsAgainst', 'opponent points per game', 'oppg', 'opp points']),
+      rpg: getStatValue(['avgRebounds', 'rebounds', 'rebounds per game', 'rpg', 'avg rebounds', 'totalRebounds']),
+      apg: getStatValue(['avgAssists', 'assists', 'assists per game', 'apg', 'avg assists', 'totalAssists']),
+      fgPct: (getStatValue(['fieldGoalPct', 'field goal pct', 'fg%', 'fgpct', 'field goal percentage']) || 0) * (getStatValue(['fieldGoalPct']) > 1 ? 1 : 100),
+      fg3Pct: (getStatValue(['threePointFieldGoalPct', 'three point field goal pct', '3pt%', '3p%', 'fg3pct', 'three point percentage']) || 0) * (getStatValue(['threePointFieldGoalPct']) > 1 ? 1 : 100),
+      ftPct: (getStatValue(['freeThrowPct', 'free throw pct', 'ft%', 'ftpct', 'free throw percentage']) || 0) * (getStatValue(['freeThrowPct']) > 1 ? 1 : 100),
+    };
+
+    // If key stats are missing, try fetching from team stats endpoint
+    if (teamStats.rpg === 0 && teamStats.apg === 0) {
+      try {
+        const seasonYear = getCurrentSeason();
+        const statsUrl = `${ESPN_BASE_URL}/teams/${teamId}/statistics?seasontype=2&season=${seasonYear}`;
+        const statsData = await fetchJSON<any>(statsUrl);
+        
+        if (statsData?.splits?.categories) {
+          const statMap: Record<string, number> = {};
+          for (const category of statsData.splits.categories) {
+            for (const stat of category.stats || []) {
+              if (stat.name && stat.value !== undefined) {
+                const statName = stat.name.toLowerCase();
+                const statValue = typeof stat.value === 'string' || typeof stat.value === 'number' 
+                  ? parseFloat(String(stat.value)) 
+                  : 0;
+                if (!isNaN(statValue)) {
+                  statMap[statName] = statValue;
+                }
+              }
+            }
+          }
+          
+          // Update stats if we found them
+          if (statMap['avgrebounds'] || statMap['rebounds per game']) {
+            teamStats.rpg = statMap['avgrebounds'] || statMap['rebounds per game'] || teamStats.rpg;
+          }
+          if (statMap['avgassists'] || statMap['assists per game']) {
+            teamStats.apg = statMap['avgassists'] || statMap['assists per game'] || teamStats.apg;
+          }
+          if (statMap['fieldgoalpct'] || statMap['field goal pct']) {
+            const fg = statMap['fieldgoalpct'] || statMap['field goal pct'] || 0;
+            teamStats.fgPct = fg > 1 ? fg : fg * 100;
+          }
+          if (statMap['threepointfieldgoalpct'] || statMap['three point field goal pct']) {
+            const fg3 = statMap['threepointfieldgoalpct'] || statMap['three point field goal pct'] || 0;
+            teamStats.fg3Pct = fg3 > 1 ? fg3 : fg3 * 100;
+          }
+          if (statMap['freethrowpct'] || statMap['free throw pct']) {
+            const ft = statMap['freethrowpct'] || statMap['free throw pct'] || 0;
+            teamStats.ftPct = ft > 1 ? ft : ft * 100;
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to fetch team stats from stats endpoint', { teamId, error: (error as Error).message });
+      }
+    }
+
     return {
       id: team.id,
       name: team.name,
@@ -841,15 +930,7 @@ export async function fetchTeamDetail(teamId: string): Promise<ESPNTeamDetail | 
       },
       roster,
       injuries,
-      stats: {
-        ppg: getStatValue('avgPointsFor'),
-        oppg: getStatValue('avgPointsAgainst'),
-        rpg: getStatValue('avgRebounds') || 0,
-        apg: getStatValue('avgAssists') || 0,
-        fgPct: getStatValue('fieldGoalPct') * 100,
-        fg3Pct: getStatValue('threePointFieldGoalPct') * 100,
-        ftPct: getStatValue('freeThrowPct') * 100,
-      },
+      stats: teamStats,
       schedule: {
         next: [],
         recent: [],
@@ -1076,7 +1157,7 @@ export async function fetchPlayerStats(
           if (category.stats && category.stats.length > 0) {
             // Check if this looks like season stats (has games played, points, etc.)
             const statNames = category.stats.map((s: any) => (s.name || s.abbreviation || '').toLowerCase());
-            const hasKeyStats = statNames.some(name => 
+            const hasKeyStats = statNames.some((name: string) => 
               name.includes('points') || name.includes('rebounds') || name.includes('assists') || 
               name === 'pts' || name === 'reb' || name === 'ast'
             );
@@ -1193,7 +1274,10 @@ export async function fetchPlayerStats(
       }
     }
   } catch (e) {
-    logger.info(`[fetchPlayerStats] Web API failed for ${playerId}, trying core API:`, e);
+    const errorData: Record<string, unknown> = e instanceof Error 
+      ? { message: e.message, stack: e.stack } 
+      : { error: String(e) };
+    logger.info(`[fetchPlayerStats] Web API failed for ${playerId}, trying core API:`, errorData);
   }
   
   // Fallback to core API endpoint
@@ -1413,7 +1497,8 @@ export async function fetchPlayerCareerStats(playerId: string): Promise<ESPNPlay
       }
     }
   } catch (e) {
-    logger.info(`[fetchPlayerCareerStats] Failed for ${playerId}:`, e);
+    const errorData = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+    logger.info(`[fetchPlayerCareerStats] Failed for ${playerId}:`, errorData);
   }
   
   return null;

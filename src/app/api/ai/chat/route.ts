@@ -181,7 +181,7 @@ interface PlayerComparisonVisual {
 }
 
 type AIVisualResponse = 
-  | { type: 'games'; data: VisualGameData[] }
+  | { type: 'games'; data: VisualGameData[]; dateDisplay?: string }
   | { type: 'game'; data: VisualGameData }
   | { type: 'player'; data: VisualPlayerData }
   | { type: 'players'; data: VisualPlayerData[] }
@@ -865,11 +865,12 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
         
         if (games.length === 0) return null;
         
-        return {
+        const gamesResponse: AIVisualResponse = {
           type: 'games',
           data: games.map(convertGameToVisual),
           dateDisplay,
         };
+        return gamesResponse;
       }
       
       case 'standings': {
@@ -996,7 +997,7 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
               // Match player1
               if (player1) {
                 const p1GameStats = allGamePlayers.find(p => {
-                  const pName = p.name.toLowerCase();
+                  const pName = (p.player?.displayName || p.player?.name || '').toLowerCase();
                   const searchName = player1.name.toLowerCase();
                   return pName === searchName || 
                          pName.includes(searchName.split(' ')[1] || searchName) ||
@@ -1024,7 +1025,7 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
               // Match player2
               if (player2) {
                 const p2GameStats = allGamePlayers.find(p => {
-                  const pName = p.name.toLowerCase();
+                  const pName = (p.player?.displayName || p.player?.name || '').toLowerCase();
                   const searchName = player2.name.toLowerCase();
                   return pName === searchName || 
                          pName.includes(searchName.split(' ')[1] || searchName) ||
@@ -1228,7 +1229,7 @@ interface ChatRequest {
   message: string;
   personality?: 'default' | 'hype' | 'drunk' | 'announcer' | 'analyst';
   length?: 'short' | 'medium' | 'long';
-  type?: 'general' | 'game';
+  type?: 'general' | 'game' | 'team';
   requestVisuals?: boolean;
   gameContext?: {
     homeTeam: string;
@@ -1238,6 +1239,20 @@ interface ChatRequest {
     period: number | null;
     gameClock: string | null;
     status: string;
+  };
+  teamContext?: {
+    teamName: string;
+    teamAbbreviation: string;
+    record: string;
+    stats: {
+      ppg: string;
+      oppg: string;
+      rpg: string;
+      apg: string;
+      fgPct: string;
+      fg3Pct: string;
+      ftPct: string;
+    };
   };
 }
 
@@ -1264,7 +1279,8 @@ export async function POST(request: Request) {
       length = 'medium',
       type = 'general',
       requestVisuals = true,
-      gameContext 
+      gameContext,
+      teamContext
     } = body;
 
     if (!message) {
@@ -1455,6 +1471,12 @@ export async function POST(request: Request) {
       gameSpecificContext = `\nSPECIFIC GAME FOCUS:\n${gameContext.awayTeam} @ ${gameContext.homeTeam}\nScore: ${gameContext.awayScore ?? 0} - ${gameContext.homeScore ?? 0}\nStatus: ${gameContext.status}`;
     }
 
+    // Build team-specific context if provided
+    let teamSpecificContext = '';
+    if ((type === 'team' || teamContext) && teamContext) {
+      teamSpecificContext = `\nTEAM ANALYSIS FOCUS:\n${teamContext.teamName} (${teamContext.teamAbbreviation})\nRecord: ${teamContext.record}\nStatistics:\n- Points Per Game: ${teamContext.stats.ppg}\n- Opponent Points Per Game: ${teamContext.stats.oppg}\n- Rebounds Per Game: ${teamContext.stats.rpg}\n- Assists Per Game: ${teamContext.stats.apg}\n- Field Goal %: ${teamContext.stats.fgPct}%\n- 3-Point %: ${teamContext.stats.fg3Pct}%\n- Free Throw %: ${teamContext.stats.ftPct}%\n\nProvide comprehensive analysis including:\n- Team strengths and weaknesses\n- Key players and their impact\n- Recent performance trends\n- Offensive and defensive efficiency\n- What to watch for in upcoming games\n- Comparison to league averages\n- Playoff implications if relevant`;
+    }
+
     // Build the full prompt with enhanced sports intelligence
     const fullPrompt = `${personalityPrompt}
 
@@ -1553,6 +1575,7 @@ ${visualContext ? 'IMPORTANT: The user will see a rich visual (cards, tables, ch
 ${liveContext}
 ===== END DATA =====
 ${gameSpecificContext}
+${teamSpecificContext}
 ${visualContext}
 ${dateContext}
 
@@ -1620,7 +1643,8 @@ If the user asked about a specific date, acknowledge that date and reference gam
         // Handle different possible response structures
         let responseText = '';
         if (response && typeof response === 'object') {
-          responseText = response.text || response.response?.text || response.content || '';
+          const responseAny = response as any;
+          responseText = responseAny.text || responseAny.response?.text || responseAny.content || '';
           
           if (!responseText) {
             console.error('[AI Chat] No text found in response:', JSON.stringify(response, null, 2));

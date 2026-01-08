@@ -3,9 +3,10 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { ChevronLeft, Users, AlertTriangle, TrendingUp, Calendar, ExternalLink } from 'lucide-react';
+import { ChevronLeft, Users, AlertTriangle, TrendingUp, Calendar, ExternalLink, Sparkles } from 'lucide-react';
 import { NBAHeader } from '@/components/nba/NBAHeader';
 import { fetchTeamDetail, type ESPNTeamDetail } from '@/services/nba/espn-api';
+import { TeamAnalyticsButton } from '@/components/ai/TeamAnalyticsButton';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 300;
@@ -110,11 +111,20 @@ export default async function TeamDetailPage({ params }: PageProps) {
         </div>
 
         {/* Stats Grid */}
-        <div className="mb-8">
-          <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-blue-400" />
-            Team Statistics
-          </h2>
+        <div className="mb-8 relative">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-blue-400" />
+              Team Statistics
+            </h2>
+            <TeamAnalyticsButton
+              teamId={team.id}
+              teamName={team.displayName}
+              teamAbbreviation={team.abbreviation}
+              record={team.record}
+              stats={team.stats}
+            />
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
             <StatCard label="PPG" value={team.stats.ppg.toFixed(1)} color="green-400" />
             <StatCard label="OPP PPG" value={team.stats.oppg.toFixed(1)} color="red-400" />
