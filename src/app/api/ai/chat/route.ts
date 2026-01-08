@@ -869,6 +869,11 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
         let games = liveData.games as LiveGameData[];
         let dateDisplay: string | undefined;
         
+        // Check if this is a future date query
+        const isFutureDateQuery = intent.filter === 'date' && intent.dateDisplay &&
+          (intent.dateDisplay === 'Tomorrow' || intent.dateDisplay?.toLowerCase().includes('next') || 
+           (parseNaturalDate(intent.date || '')?.isFuture ?? false));
+        
         if (intent.filter === 'live') {
           games = games.filter(g => g.status === 'live' || g.status === 'halftime');
           dateDisplay = 'Today';
@@ -886,7 +891,8 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
           dateDisplay = 'Today';
         }
         
-        if (games.length === 0) return null;
+        // For future dates, allow empty games array (Gemini will populate it)
+        if (games.length === 0 && !isFutureDateQuery) return null;
         
         const gamesResponse: AIVisualResponse = {
           type: 'games',
@@ -1446,11 +1452,19 @@ export async function POST(request: Request) {
              (parseNaturalDate(intent.date || '')?.isFuture ?? false));
           
           if (visualResponse.data.length === 0 && isFutureQuery) {
-            visualContext = `\n\nVISUAL DATA BEING SHOWN TO USER:\nThe API returned 0 games for this future date, but the user will see a games grid.\n\n`;
+            visualContext = `\n\nVISUAL DATA BEING SHOWN TO USER:\nThe API returned 0 games for this future date (${intent.dateDisplay || intent.date}), but the user will see a games grid.\n\n`;
             visualContext += `**CRITICAL: This is a FUTURE DATE query. The user asked about games on ${intent.dateDisplay || intent.date}.\n`;
             visualContext += `You MUST use your knowledge of NBA schedules to answer. The NBA plays games almost daily during the regular season.\n`;
-            visualContext += `Even if the API shows 0 games, you have knowledge of scheduled games, fixtures, and typical NBA schedule patterns.\n`;
-            visualContext += `List the scheduled games you know for this date, including teams, times, venues, and broadcast information.\n`;
+            visualContext += `Even if the API shows 0 games, you have knowledge of scheduled games, fixtures, and typical NBA schedule patterns.\n\n`;
+            visualContext += `**YOU MUST PROVIDE THE GAME DATA IN JSON FORMAT** so the visual can be updated correctly.\n`;
+            visualContext += `At the very end of your response, include a JSON block with the scheduled games you know for this date:\n\n`;
+            visualContext += `\`\`\`json\n{"scheduledGames": [\n`;
+            visualContext += `  {"awayTeam": "DET", "homeTeam": "NYK", "awayRecord": "28-9", "homeRecord": "24-13", "venue": "Madison Square Garden", "broadcast": "ESPN", "status": "scheduled"},\n`;
+            visualContext += `  {"awayTeam": "OKC", "homeTeam": "LAL", "awayRecord": "30-7", "homeRecord": "22-15", "venue": "Crypto.com Arena", "broadcast": "NBA TV", "status": "scheduled"}\n`;
+            visualContext += `]}\n\`\`\`\n\n`;
+            visualContext += `IMPORTANT: Use official team abbreviations (e.g., DET, NYK, LAL, OKC, BOS, PHI, etc.). Include records if you know them. `;
+            visualContext += `Status should be "scheduled" for future games. `;
+            visualContext += `List ALL games you know are scheduled for this date. `;
             visualContext += `DO NOT say "no games scheduled" unless you're absolutely certain (e.g., All-Star break, league-wide off days).**\n`;
           } else {
             visualContext = `\n\nVISUAL DATA BEING SHOWN TO USER:\nThe user will see a visual grid of ${visualResponse.data.length} games. Here are the games:\n`;
@@ -1740,6 +1754,92 @@ If the user asked about a specific date, acknowledge that date and reference gam
     }
     
     let response = responseText;
+
+    // If games visual response for future date with 0 games, check for scheduled games from Gemini
+    if (visualResponse?.type === 'games' && visualResponse.data.length === 0) {
+      const isFutureQuery = intent.type === 'games' && intent.filter === 'date' && 
+        (intent.dateDisplay === 'Tomorrow' || intent.dateDisplay?.toLowerCase().includes('next') || 
+         (parseNaturalDate(intent.date || '')?.isFuture ?? false));
+      
+      if (isFutureQuery) {
+        // Try to extract scheduled games from Gemini's response
+        const jsonBlockMatch = response.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+        const inlineJsonMatch = response.match(/\{"scheduledGames":\s*\[[\s\S]*?\]\}/);
+        
+        const jsonStr = jsonBlockMatch?.[1] || inlineJsonMatch?.[0];
+        
+        if (jsonStr) {
+          try {
+            const parsed = JSON.parse(jsonStr);
+            
+            if (parsed.scheduledGames && Array.isArray(parsed.scheduledGames) && parsed.scheduledGames.length > 0) {
+              console.log(`[AI Chat] Gemini provided ${parsed.scheduledGames.length} scheduled games for future date`);
+              
+              // Convert Gemini's scheduled games to visual format
+              const scheduledGames: VisualGameData[] = parsed.scheduledGames.map((game: any) => {
+                // Get team info from NBA_TEAMS
+                const awayTeamData = Object.values(NBA_TEAMS).find(t => 
+                  t.abbreviation.toUpperCase() === game.awayTeam?.toUpperCase()
+                );
+                const homeTeamData = Object.values(NBA_TEAMS).find(t => 
+                  t.abbreviation.toUpperCase() === game.homeTeam?.toUpperCase()
+                );
+                
+                if (!awayTeamData || !homeTeamData) {
+                  console.warn(`[AI Chat] Could not find team data for ${game.awayTeam} or ${game.homeTeam}`);
+                  return null;
+                }
+                
+                // Parse records
+                const awayRecord = game.awayRecord || '0-0';
+                const homeRecord = game.homeRecord || '0-0';
+                const [awayWins, awayLosses] = awayRecord.split('-').map((n: string) => parseInt(n) || 0);
+                const [homeWins, homeLosses] = homeRecord.split('-').map((n: string) => parseInt(n) || 0);
+                
+                return {
+                  gameId: `${game.awayTeam}-${game.homeTeam}-${intent.date || ''}`,
+                  awayTeam: {
+                    name: awayTeamData.name,
+                    abbreviation: awayTeamData.abbreviation,
+                    logo: `https://a.espncdn.com/i/teamlogos/nba/500/${awayTeamData.abbreviation.toLowerCase()}.png`,
+                    score: 0,
+                    record: awayRecord,
+                  },
+                  homeTeam: {
+                    name: homeTeamData.name,
+                    abbreviation: homeTeamData.abbreviation,
+                    logo: `https://a.espncdn.com/i/teamlogos/nba/500/${homeTeamData.abbreviation.toLowerCase()}.png`,
+                    score: 0,
+                    record: homeRecord,
+                  },
+                  status: game.status || 'scheduled',
+                  venue: game.venue || undefined,
+                  broadcast: game.broadcast || undefined,
+                };
+              }).filter((game: VisualGameData | null): game is VisualGameData => game !== null);
+              
+              if (scheduledGames.length > 0) {
+                // Update visual response with Gemini's scheduled games
+                visualResponse.data = scheduledGames;
+                visualResponse.dateDisplay = intent.dateDisplay;
+                
+                console.log(`[AI Chat] Updated visual with ${scheduledGames.length} games from Gemini's knowledge:`, 
+                  scheduledGames.map(g => `${g.awayTeam.abbreviation} @ ${g.homeTeam.abbreviation}`)
+                );
+                
+                // Remove the JSON block from the response text so it doesn't show to user
+                response = response.replace(/```json\s*\{[\s\S]*?\}\s*```/g, '').replace(/\{"scheduledGames":\s*\[[\s\S]*?\]\}/g, '').trim();
+              }
+            }
+          } catch (parseError) {
+            console.error('[AI Chat] Failed to parse scheduled games from Gemini:', parseError);
+            console.error('[AI Chat] JSON string attempted:', jsonStr);
+          }
+        } else {
+          console.log(`[AI Chat] No scheduled games JSON found in Gemini response for future date`);
+        }
+      }
+    }
 
     // If player visual response, check for corrected stats from Gemini
     if (visualResponse?.type === 'player') {
