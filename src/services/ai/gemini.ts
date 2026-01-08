@@ -1,6 +1,6 @@
 // Gemini AI Service - Handles all AI interactions with proper grounding
 
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { GoogleGenAI } from "@google/genai";
 import { logger } from '@/lib/logger';
 import type { AIGameContext } from '@/types/nba';
 
@@ -14,31 +14,19 @@ if (!GEMINI_API_KEY) {
   console.warn('[AI] GEMINI_API_KEY not configured - AI features disabled');
 }
 
-const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+// Initialize client - SDK reads from GEMINI_API_KEY env var or can accept apiKey in constructor
+let ai: GoogleGenAI | null = null;
+try {
+  // Try with explicit API key first, fallback to empty object (reads from env)
+  ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : new GoogleGenAI({});
+  console.log('[AI] GoogleGenAI initialized successfully');
+} catch (error) {
+  console.error('[AI] Failed to initialize GoogleGenAI:', error);
+  ai = null;
+}
 
-// Safety settings - block harmful content
-const SAFETY_SETTINGS = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-];
-
-// Model selection - Using Gemini 1.5 Flash (stable and available)
-const FLASH_MODEL = 'gemini-1.5-flash';
-const PRO_MODEL = 'gemini-1.5-flash';
+// Model selection - Using Gemini 2.5 Pro as requested
+const MODEL_NAME = 'gemini-2.5-pro';
 
 // ============================================
 // SYSTEM PROMPTS
@@ -138,36 +126,6 @@ function formatGameContext(context: AIGameContext): string {
 }
 
 // ============================================
-// VALIDATION
-// ============================================
-
-function validatePlayerName(name: string, context: AIGameContext): boolean {
-  // Check if the player name appears in our data
-  const allPlayers = [
-    context.homeLeaders.points?.player,
-    context.homeLeaders.rebounds?.player,
-    context.homeLeaders.assists?.player,
-    context.awayLeaders.points?.player,
-    context.awayLeaders.rebounds?.player,
-    context.awayLeaders.assists?.player,
-  ].filter(Boolean);
-
-  // Also check recent plays
-  context.recentPlays.forEach((play) => {
-    // Extract player names from play descriptions
-    const words = play.description.split(' ');
-    // Simple heuristic - player names are usually at the start
-    if (words.length >= 2) {
-      allPlayers.push(`${words[0]} ${words[1]}`);
-    }
-  });
-
-  return allPlayers.some((p) =>
-    p?.toLowerCase().includes(name.toLowerCase())
-  );
-}
-
-// ============================================
 // PUBLIC API
 // ============================================
 
@@ -185,7 +143,7 @@ export async function chatAboutGame(
   question: string,
   context: AIGameContext
 ): Promise<ChatResponse> {
-  if (!genAI) {
+  if (!ai || !GEMINI_API_KEY) {
     return {
       text: 'AI features are currently unavailable. Please check back later.',
       model: 'none',
@@ -194,11 +152,6 @@ export async function chatAboutGame(
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: FLASH_MODEL,
-      safetySettings: SAFETY_SETTINGS,
-    });
-
     const contextStr = formatGameContext(context);
     const prompt = `${CHAT_SYSTEM_PROMPT}
 
@@ -209,22 +162,47 @@ USER QUESTION: ${question}
 
 Respond to the user's question using ONLY the data provided above.`;
 
-    logger.ai.invoke(FLASH_MODEL, 'chat', { questionLength: question.length });
+    logger.ai.invoke(MODEL_NAME, 'chat', { questionLength: question.length });
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    console.log('[AI] Calling generateContent with model:', MODEL_NAME);
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+
+    console.log('[AI] Response received:', {
+      hasText: !!response.text,
+      responseKeys: Object.keys(response || {}),
+      responseType: typeof response,
+    });
+
+    // Handle different possible response structures
+    let text = '';
+    if (response && typeof response === 'object') {
+      // Try different possible properties
+      text = response.text || response.response?.text || response.content || '';
+      
+      // If still no text, log the full response for debugging
+      if (!text) {
+        console.error('[AI] No text found in response:', JSON.stringify(response, null, 2));
+      }
+    }
+
+    if (!text) {
+      throw new Error('No text content in API response. Check API key and model availability.');
+    }
 
     return {
       text,
-      model: FLASH_MODEL,
-      tokensUsed: response.usageMetadata?.totalTokenCount,
+      model: MODEL_NAME,
+      tokensUsed: response.usageMetadata?.totalTokenCount || response.usage?.totalTokenCount,
     };
   } catch (error) {
-    logger.ai.error(FLASH_MODEL, 'chat', error as Error);
+    console.error('[AI] Error in chatAboutGame:', error);
+    logger.ai.error(MODEL_NAME, 'chat', error as Error);
     return {
-      text: 'I encountered an error processing your question. Please try again.',
-      model: FLASH_MODEL,
+      text: `I encountered an error: ${(error as Error).message}. Please check your API key configuration.`,
+      model: MODEL_NAME,
       error: (error as Error).message,
     };
   }
@@ -238,7 +216,7 @@ export async function generatePregamePreview(
   awayTeam: string,
   additionalContext?: string
 ): Promise<ChatResponse> {
-  if (!genAI) {
+  if (!ai || !GEMINI_API_KEY) {
     return {
       text: 'AI features are currently unavailable.',
       model: 'none',
@@ -247,11 +225,6 @@ export async function generatePregamePreview(
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: PRO_MODEL,
-      safetySettings: SAFETY_SETTINGS,
-    });
-
     const prompt = `${SUMMARY_SYSTEM_PROMPT}
 
 Generate a brief pregame preview for:
@@ -265,21 +238,23 @@ Write a 2-paragraph preview focusing on:
 
 Keep it engaging but grounded in the information provided. If you don't have specific stats, focus on general team narratives.`;
 
-    logger.ai.invoke(PRO_MODEL, 'pregame_preview', { homeTeam, awayTeam });
+    logger.ai.invoke(MODEL_NAME, 'pregame_preview', { homeTeam, awayTeam });
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
 
     return {
-      text: response.text(),
-      model: PRO_MODEL,
+      text: response.text || '',
+      model: MODEL_NAME,
       tokensUsed: response.usageMetadata?.totalTokenCount,
     };
   } catch (error) {
-    logger.ai.error(PRO_MODEL, 'pregame_preview', error as Error);
+    logger.ai.error(MODEL_NAME, 'pregame_preview', error as Error);
     return {
       text: 'Unable to generate preview at this time.',
-      model: PRO_MODEL,
+      model: MODEL_NAME,
       error: (error as Error).message,
     };
   }
@@ -292,7 +267,7 @@ export async function generateGameSummary(
   context: AIGameContext,
   type: 'halftime' | 'final'
 ): Promise<ChatResponse> {
-  if (!genAI) {
+  if (!ai || !GEMINI_API_KEY) {
     return {
       text: 'AI features are currently unavailable.',
       model: 'none',
@@ -301,11 +276,6 @@ export async function generateGameSummary(
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: FLASH_MODEL,
-      safetySettings: SAFETY_SETTINGS,
-    });
-
     const contextStr = formatGameContext(context);
     const summaryType = type === 'halftime' ? 'halftime report' : 'final game recap';
 
@@ -324,24 +294,26 @@ ${type === 'halftime' ? '- What to watch for in the second half' : '- The key tu
 
 Write 2-3 concise paragraphs.`;
 
-    logger.ai.invoke(FLASH_MODEL, `${type}_summary`, {
+    logger.ai.invoke(MODEL_NAME, `${type}_summary`, {
       homeTeam: context.game.homeTeam,
       awayTeam: context.game.awayTeam,
     });
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
 
     return {
-      text: response.text(),
-      model: FLASH_MODEL,
+      text: response.text || '',
+      model: MODEL_NAME,
       tokensUsed: response.usageMetadata?.totalTokenCount,
     };
   } catch (error) {
-    logger.ai.error(FLASH_MODEL, `${type}_summary`, error as Error);
+    logger.ai.error(MODEL_NAME, `${type}_summary`, error as Error);
     return {
       text: `Unable to generate ${type} summary at this time.`,
-      model: FLASH_MODEL,
+      model: MODEL_NAME,
       error: (error as Error).message,
     };
   }
@@ -355,7 +327,7 @@ export async function generateMomentCard(
   context: AIGameContext,
   momentType: 'big_play' | 'lead_change' | 'scoring_run' | 'clutch_shot'
 ): Promise<ChatResponse> {
-  if (!genAI) {
+  if (!ai || !GEMINI_API_KEY) {
     return {
       text: 'AI features are currently unavailable.',
       model: 'none',
@@ -364,11 +336,6 @@ export async function generateMomentCard(
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: FLASH_MODEL,
-      safetySettings: SAFETY_SETTINGS,
-    });
-
     const contextStr = formatGameContext(context);
     const momentDescriptions: Record<string, string> = {
       big_play: 'a significant play that could swing momentum',
@@ -388,21 +355,23 @@ This is ${momentDescriptions[momentType]}.
 
 Explain in 2-3 sentences why this moment matters. Capture the excitement while staying grounded in the data.`;
 
-    logger.ai.invoke(FLASH_MODEL, 'moment_card', { momentType });
+    logger.ai.invoke(MODEL_NAME, 'moment_card', { momentType });
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
 
     return {
-      text: response.text(),
-      model: FLASH_MODEL,
+      text: response.text || '',
+      model: MODEL_NAME,
       tokensUsed: response.usageMetadata?.totalTokenCount,
     };
   } catch (error) {
-    logger.ai.error(FLASH_MODEL, 'moment_card', error as Error);
+    logger.ai.error(MODEL_NAME, 'moment_card', error as Error);
     return {
       text: 'An exciting play!',
-      model: FLASH_MODEL,
+      model: MODEL_NAME,
       error: (error as Error).message,
     };
   }
@@ -415,17 +384,12 @@ export async function* streamChatAboutGame(
   question: string,
   context: AIGameContext
 ): AsyncGenerator<string, void, unknown> {
-  if (!genAI) {
+  if (!ai || !GEMINI_API_KEY) {
     yield 'AI features are currently unavailable.';
     return;
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: FLASH_MODEL,
-      safetySettings: SAFETY_SETTINGS,
-    });
-
     const contextStr = formatGameContext(context);
     const prompt = `${CHAT_SYSTEM_PROMPT}
 
@@ -436,18 +400,27 @@ USER QUESTION: ${question}
 
 Respond to the user's question using ONLY the data provided above.`;
 
-    logger.ai.invoke(FLASH_MODEL, 'chat_stream', { questionLength: question.length });
+    logger.ai.invoke(MODEL_NAME, 'chat_stream', { questionLength: question.length });
 
-    const result = await model.generateContentStream(prompt);
+    const result = await ai.models.generateContentStream({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
 
-    for await (const chunk of result.stream) {
-      const text = chunk.text();
-      if (text) {
-        yield text;
+    // Handle streaming response - check structure
+    if (result.stream) {
+      for await (const chunk of result.stream) {
+        const text = chunk.text || chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (text) {
+          yield text;
+        }
       }
+    } else {
+      // If no stream, try alternative structure
+      yield 'Streaming not available.';
     }
   } catch (error) {
-    logger.ai.error(FLASH_MODEL, 'chat_stream', error as Error);
+    logger.ai.error(MODEL_NAME, 'chat_stream', error as Error);
     yield 'I encountered an error. Please try again.';
   }
 }
@@ -456,6 +429,5 @@ Respond to the user's question using ONLY the data provided above.`;
  * Check if AI is available
  */
 export function isAIAvailable(): boolean {
-  return !!genAI;
+  return !!ai && !!GEMINI_API_KEY;
 }
-

@@ -343,7 +343,9 @@ export async function fetchLiveScores(): Promise<LiveDataResponse> {
 
 // Fetch games for a specific date (format: YYYYMMDD)
 export async function fetchScoresByDate(dateStr: string): Promise<LiveDataResponse> {
+  // ESPN API expects date in YYYYMMDD format
   const url = `${ESPN_BASE_URL}/scoreboard?dates=${dateStr}`;
+  console.log(`[fetchScoresByDate] Fetching games for date: ${dateStr}, URL: ${url}`);
   
   try {
     const response = await fetchWithTimeout(url, 10000);
@@ -417,6 +419,227 @@ export async function fetchScoresByDate(dateStr: string): Promise<LiveDataRespon
       sourceUrl: 'https://www.espn.com/nba/schedule',
     };
   }
+}
+
+// Find historical game between two teams on a specific date (or most recent)
+// Searches from 1946 (first NBA season) to present using multiple strategies
+export async function findGameByTeams(
+  team1Abbr: string,
+  team2Abbr: string,
+  dateStr?: string
+): Promise<{ gameId: string; game: LiveGameData } | null> {
+  // Strategy 1: If date provided, search that specific date first
+  if (dateStr) {
+    try {
+      const dateData = await fetchScoresByDate(dateStr);
+      const game = dateData.games.find(g => 
+        (g.homeTeam.abbreviation === team1Abbr && g.awayTeam.abbreviation === team2Abbr) ||
+        (g.homeTeam.abbreviation === team2Abbr && g.awayTeam.abbreviation === team1Abbr)
+      );
+      if (game) {
+        logger.info('Found game by specific date', { gameId: game.gameId, date: dateStr });
+        return { gameId: game.gameId, game };
+      }
+    } catch (error) {
+      logger.error('Error fetching game by date', { dateStr, error: (error as Error).message });
+    }
+  }
+  
+  // Strategy 2: Use team schedule API (more efficient for historical games)
+  // Try both teams' schedules to find the matchup
+  try {
+    const teamIds = await getTeamIds([team1Abbr, team2Abbr]);
+    if (teamIds.length === 2) {
+      const [team1Id, team2Id] = teamIds;
+      
+      // Fetch schedule for first team and find games against second team
+      const team1Schedule = await fetchTeamSchedule(team1Id);
+      const matchup = team1Schedule.find(g => 
+        (g.homeTeam.abbreviation === team1Abbr && g.awayTeam.abbreviation === team2Abbr) ||
+        (g.homeTeam.abbreviation === team2Abbr && g.awayTeam.abbreviation === team1Abbr)
+      );
+      
+      if (matchup) {
+        logger.info('Found game via team schedule', { gameId: matchup.id, date: matchup.date });
+        // Convert to LiveGameData format
+        const game: LiveGameData = {
+          gameId: matchup.id,
+          homeTeam: {
+            name: matchup.homeTeam.name || 'Unknown',
+            abbreviation: matchup.homeTeam.abbreviation,
+            score: matchup.homeTeam.score,
+          },
+          awayTeam: {
+            name: matchup.awayTeam.name || 'Unknown',
+            abbreviation: matchup.awayTeam.abbreviation,
+            score: matchup.awayTeam.score,
+          },
+          status: 'final',
+          period: 0,
+          clock: '',
+        };
+        return { gameId: matchup.id, game };
+      }
+    }
+  } catch (error) {
+    logger.error('Error using team schedule search', { error: (error as Error).message });
+  }
+  
+  // Strategy 3: Search backwards from today - use intelligent date ranges
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const nbaStartYear = 1946; // First NBA season
+  
+  // First, search last 180 days day-by-day (most likely to find recent games)
+  for (let i = 0; i < 180; i++) {
+    const searchDate = new Date(today);
+    searchDate.setDate(searchDate.getDate() - i);
+    const dateStr = searchDate.toISOString().split('T')[0].replace(/-/g, '');
+    
+    try {
+      const dateData = await fetchScoresByDate(dateStr);
+      const game = dateData.games.find(g => 
+        (g.homeTeam.abbreviation === team1Abbr && g.awayTeam.abbreviation === team2Abbr) ||
+        (g.homeTeam.abbreviation === team2Abbr && g.awayTeam.abbreviation === team1Abbr)
+      );
+      if (game) {
+        logger.info('Found historical game', { gameId: game.gameId, date: dateStr });
+        return { gameId: game.gameId, game };
+      }
+    } catch (error) {
+      // Continue searching
+      continue;
+    }
+  }
+  
+  // Strategy 4: For older games, search by season (October to June of each year)
+  // Search backwards from current season to 1946, sampling dates efficiently
+  for (let year = currentYear; year >= nbaStartYear; year--) {
+    // NBA season runs from October to June
+    const seasonMonths = [
+      { month: 10, days: 31 }, // October
+      { month: 11, days: 30 }, // November
+      { month: 12, days: 31 }, // December
+      { month: 1, days: 31 },  // January
+      { month: 2, days: 28 },  // February (handle leap years)
+      { month: 3, days: 31 },  // March
+      { month: 4, days: 30 },  // April
+      { month: 5, days: 31 },  // May
+      { month: 6, days: 30 },  // June
+    ];
+    
+    for (const { month, days } of seasonMonths) {
+      // Sample dates in each month (check every 5th day to speed up search)
+      for (let day = 1; day <= days; day += 5) {
+        // Handle leap years for February
+        if (month === 2 && day === 29 && !isLeapYear(year)) continue;
+        
+        const searchDate = new Date(year, month - 1, day);
+        // Skip future dates
+        if (searchDate > today) continue;
+        
+        const dateStr = searchDate.toISOString().split('T')[0].replace(/-/g, '');
+        
+        try {
+          const dateData = await fetchScoresByDate(dateStr);
+          const game = dateData.games.find(g => 
+            (g.homeTeam.abbreviation === team1Abbr && g.awayTeam.abbreviation === team2Abbr) ||
+            (g.homeTeam.abbreviation === team2Abbr && g.awayTeam.abbreviation === team1Abbr)
+          );
+          if (game) {
+            logger.info('Found historical game', { gameId: game.gameId, date: dateStr, year });
+            return { gameId: game.gameId, game };
+          }
+        } catch (error) {
+          // Continue searching
+          continue;
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Helper function to get team IDs from abbreviations
+async function getTeamIds(abbreviations: string[]): Promise<string[]> {
+  // Map of common abbreviations to ESPN team IDs
+  // This is a simplified mapping - in production, you'd fetch from ESPN API
+  const teamIdMap: Record<string, string> = {
+    'LAL': '13', 'GSW': '9', 'BOS': '2', 'MIA': '14', 'MIL': '17',
+    'PHI': '20', 'DEN': '7', 'PHX': '21', 'DAL': '6', 'LAC': '12',
+    'NYK': '18', 'CLE': '5', 'CHI': '4', 'ATL': '1', 'IND': '11',
+    'SAC': '23', 'MEM': '29', 'MIN': '16', 'NOP': '3', 'OKC': '25',
+    'ORL': '19', 'POR': '22', 'SAS': '27', 'TOR': '28', 'UTA': '26',
+    'WAS': '30', 'CHA': '30', 'DET': '8', 'HOU': '10', 'BKN': '17',
+  };
+  
+  return abbreviations.map(abbr => teamIdMap[abbr] || '').filter(id => id);
+}
+
+// Fetch team schedule (all games, including historical)
+async function fetchTeamSchedule(teamId: string): Promise<Array<{
+  id: string;
+  date: string;
+  homeTeam: { abbreviation: string; name?: string; score: number };
+  awayTeam: { abbreviation: string; name?: string; score: number };
+}>> {
+  const url = `${ESPN_BASE_URL}/teams/${teamId}/schedule`;
+  
+  try {
+    const response = await fetchWithTimeout(url, 10000);
+    if (!response || !response.ok) {
+      return [];
+    }
+    
+    const data = await response.json();
+    const games: Array<{
+      id: string;
+      date: string;
+      homeTeam: { abbreviation: string; name?: string; score: number };
+      awayTeam: { abbreviation: string; name?: string; score: number };
+    }> = [];
+    
+    if (data.events && Array.isArray(data.events)) {
+      for (const event of data.events) {
+        const competition = event.competitions?.[0];
+        if (!competition) continue;
+        
+        const homeComp = competition.competitors?.find((c: any) => c.homeAway === 'home');
+        const awayComp = competition.competitors?.find((c: any) => c.homeAway === 'away');
+        if (!homeComp || !awayComp) continue;
+        
+        const status = competition.status?.type?.name?.toLowerCase() || '';
+        // Only include completed games
+        if (!status.includes('final')) continue;
+        
+        games.push({
+          id: event.id,
+          date: event.date,
+          homeTeam: {
+            abbreviation: homeComp.team?.abbreviation || '???',
+            name: homeComp.team?.displayName,
+            score: parseInt(homeComp.score?.displayValue || homeComp.score || '0'),
+          },
+          awayTeam: {
+            abbreviation: awayComp.team?.abbreviation || '???',
+            name: awayComp.team?.displayName,
+            score: parseInt(awayComp.score?.displayValue || awayComp.score || '0'),
+          },
+        });
+      }
+    }
+    
+    return games;
+  } catch (error) {
+    logger.error('Error fetching team schedule', { teamId, error: (error as Error).message });
+    return [];
+  }
+}
+
+// Helper function to check leap years
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
 }
 
 // Fetch games for a date range (useful for calendar month view)
@@ -655,8 +878,16 @@ async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | null> {
         const [fg3m, fg3a] = parseShooting(getStatByIndex(2));
         const [ftm, fta] = parseShooting(getStatByIndex(3));
         
+        // Extract player name - try multiple paths to ensure accuracy
+        const playerName = p.athlete?.displayName || 
+                          p.athlete?.fullName || 
+                          p.displayName || 
+                          p.fullName || 
+                          p.name || 
+                          'Unknown';
+        
         return {
-          name: p.athlete?.displayName || 'Unknown',
+          name: playerName,
           team: teamAbbr,
           minutes: getStatByIndex(0),
           points: parseInt(getStatByIndex(13)) || 0,
@@ -736,7 +967,9 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
   ];
 
   if (data.games.length > 0) {
-    lines.push("TODAY'S GAMES:");
+    // Note: The actual date display is handled in the visual component
+    // This text context will show "TODAY'S GAMES" as default
+    lines.push("GAMES:");
     for (const game of data.games) {
       const statusStr = game.status === 'live' 
         ? `🔴 LIVE Q${game.period} ${game.clock}`
@@ -794,12 +1027,20 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
       if (gameBoxscore) {
         lines.push(`\n  === ${game.awayTeam.abbreviation} INDIVIDUAL PLAYER STATS ===`);
         gameBoxscore.awayPlayers.slice(0, 8).forEach(p => {
-          lines.push(`    ${p.name}: ${p.points}pts, ${p.rebounds}reb, ${p.assists}ast, ${p.steals}stl, ${p.blocks}blk, ${p.fgm}/${p.fga} FG, ${p.fg3m}/${p.fg3a} 3PT, ${p.minutes} min, +/- ${p.plusMinus}`);
+          const fgPct = p.fga > 0 ? ((p.fgm / p.fga) * 100).toFixed(1) : '0.0';
+          const fg3Pct = p.fg3a > 0 ? ((p.fg3m / p.fg3a) * 100).toFixed(1) : '0.0';
+          const plusMinusNum = parseInt(p.plusMinus) || 0;
+          const plusMinusFormatted = plusMinusNum > 0 ? `+${plusMinusNum}` : `${plusMinusNum}`;
+          lines.push(`    ${p.name}: ${p.points}pts, ${p.rebounds}reb, ${p.assists}ast, ${p.steals}stl, ${p.blocks}blk, ${p.fgm}/${p.fga} FG (${fgPct}%), ${p.fg3m}/${p.fg3a} 3PT (${fg3Pct}%), ${p.minutes} min, +/- ${plusMinusFormatted}`);
         });
         
         lines.push(`\n  === ${game.homeTeam.abbreviation} INDIVIDUAL PLAYER STATS ===`);
         gameBoxscore.homePlayers.slice(0, 8).forEach(p => {
-          lines.push(`    ${p.name}: ${p.points}pts, ${p.rebounds}reb, ${p.assists}ast, ${p.steals}stl, ${p.blocks}blk, ${p.fgm}/${p.fga} FG, ${p.fg3m}/${p.fg3a} 3PT, ${p.minutes} min, +/- ${p.plusMinus}`);
+          const fgPct = p.fga > 0 ? ((p.fgm / p.fga) * 100).toFixed(1) : '0.0';
+          const fg3Pct = p.fg3a > 0 ? ((p.fg3m / p.fg3a) * 100).toFixed(1) : '0.0';
+          const plusMinusNum = parseInt(p.plusMinus) || 0;
+          const plusMinusFormatted = plusMinusNum > 0 ? `+${plusMinusNum}` : `${plusMinusNum}`;
+          lines.push(`    ${p.name}: ${p.points}pts, ${p.rebounds}reb, ${p.assists}ast, ${p.steals}stl, ${p.blocks}blk, ${p.fgm}/${p.fga} FG (${fgPct}%), ${p.fg3m}/${p.fg3a} 3PT (${fg3Pct}%), ${p.minutes} min, +/- ${plusMinusFormatted}`);
         });
       }
       
@@ -828,9 +1069,151 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
     }
   }
 
+  // Extract league leaders from all player stats in boxscores
+  if (boxscores && boxscores.length > 0) {
+    const allPlayers: Array<{
+      name: string;
+      team: string;
+      points: number;
+      rebounds: number;
+      assists: number;
+      fgPct: number;
+      fg3Pct: number;
+      ftPct: number;
+      fga: number;
+      fg3a: number;
+      minutes: string;
+    }> = [];
+
+    for (const boxscore of boxscores) {
+      const game = data.games.find(g => g.gameId === boxscore.gameId);
+      const homeTeam = game?.homeTeam.abbreviation || 'Unknown';
+      const awayTeam = game?.awayTeam.abbreviation || 'Unknown';
+
+      // Process home players
+      for (const player of boxscore.homePlayers) {
+        if (player.minutes && player.minutes !== '0:00' && (player.fga > 0 || player.points > 0)) {
+          const fgPct = player.fga > 0 ? (player.fgm / player.fga) * 100 : 0;
+          const fg3Pct = player.fg3a > 0 ? (player.fg3m / player.fg3a) * 100 : 0;
+          const ftPct = player.fta > 0 ? (player.ftm / player.fta) * 100 : 0;
+          
+          allPlayers.push({
+            name: player.name,
+            team: homeTeam,
+            points: player.points,
+            rebounds: player.rebounds,
+            assists: player.assists,
+            fgPct,
+            fg3Pct,
+            ftPct,
+            fga: player.fga,
+            fg3a: player.fg3a,
+            minutes: player.minutes,
+          });
+        }
+      }
+      
+      // Process away players
+      for (const player of boxscore.awayPlayers) {
+        if (player.minutes && player.minutes !== '0:00' && (player.fga > 0 || player.points > 0)) {
+          const fgPct = player.fga > 0 ? (player.fgm / player.fga) * 100 : 0;
+          const fg3Pct = player.fg3a > 0 ? (player.fg3m / player.fg3a) * 100 : 0;
+          const ftPct = player.fta > 0 ? (player.ftm / player.fta) * 100 : 0;
+          
+          allPlayers.push({
+            name: player.name,
+            team: awayTeam,
+            points: player.points,
+            rebounds: player.rebounds,
+            assists: player.assists,
+            fgPct,
+            fg3Pct,
+            ftPct,
+            fga: player.fga,
+            fg3a: player.fg3a,
+            minutes: player.minutes,
+          });
+        }
+      }
+    }
+
+    if (allPlayers.length > 0) {
+      lines.push('\n===== TODAY\'S GAME LEADERS =====');
+      
+      // Top scorers
+      const topScorers = [...allPlayers].sort((a, b) => b.points - a.points).slice(0, 10);
+      if (topScorers.length > 0) {
+        lines.push('\nTOP SCORERS (from today\'s games):');
+        topScorers.forEach((p, i) => {
+          lines.push(`  ${i + 1}. ${p.name} (${p.team}): ${p.points} points`);
+        });
+      }
+
+      // Best field goal percentage (minimum 5 attempts)
+      const bestShooters = [...allPlayers]
+        .filter(p => p.fga >= 5)
+        .sort((a, b) => b.fgPct - a.fgPct)
+        .slice(0, 10);
+      if (bestShooters.length > 0) {
+        lines.push('\nBEST FIELD GOAL SHOOTERS (min 5 FGA, from today\'s games):');
+        bestShooters.forEach((p, i) => {
+          lines.push(`  ${i + 1}. ${p.name} (${p.team}): ${p.fgPct.toFixed(1)}% (${Math.round((p.fgPct / 100) * p.fga)}/${p.fga})`);
+        });
+      }
+
+      // Best 3-point shooters (minimum 3 attempts)
+      const best3ptShooters = [...allPlayers]
+        .filter(p => p.fg3a >= 3)
+        .sort((a, b) => b.fg3Pct - a.fg3Pct)
+        .slice(0, 10);
+      if (best3ptShooters.length > 0) {
+        lines.push('\nBEST 3-POINT SHOOTERS (min 3 3PA, from today\'s games):');
+        best3ptShooters.forEach((p, i) => {
+          lines.push(`  ${i + 1}. ${p.name} (${p.team}): ${p.fg3Pct.toFixed(1)}% (${Math.round((p.fg3Pct / 100) * p.fg3a)}/${p.fg3a})`);
+        });
+      }
+
+      // Top rebounders
+      const topRebounders = [...allPlayers].sort((a, b) => b.rebounds - a.rebounds).slice(0, 10);
+      if (topRebounders.length > 0) {
+        lines.push('\nTOP REBOUNDERS (from today\'s games):');
+        topRebounders.forEach((p, i) => {
+          lines.push(`  ${i + 1}. ${p.name} (${p.team}): ${p.rebounds} rebounds`);
+        });
+      }
+
+      // Top assist leaders
+      const topAssisters = [...allPlayers].sort((a, b) => b.assists - a.assists).slice(0, 10);
+      if (topAssisters.length > 0) {
+        lines.push('\nTOP ASSIST LEADERS (from today\'s games):');
+        topAssisters.forEach((p, i) => {
+          lines.push(`  ${i + 1}. ${p.name} (${p.team}): ${p.assists} assists`);
+        });
+      }
+
+      lines.push('\nNOTE: These are leaders from today\'s completed/live games only. For season-long league leaders, the AI should acknowledge this is game-specific data.');
+    }
+  }
+
   lines.push('\n===== END OF DATA =====');
   lines.push(`\nALWAYS cite the source URL (${data.sourceUrl}) when sharing this information.`);
   lines.push('If asked about specific player stats for a game, you have the data above. Provide specific numbers when available.');
+  lines.push('\nCRITICAL FOR LEADER QUERIES:');
+  lines.push('- If asked about "best shooters", "top scorers", "rebound leaders", "assist leaders", or any leader category, you HAVE the data above.');
+  lines.push('- Look in the "TODAY\'S GAME LEADERS" section above - it contains ranked lists of top scorers, best shooters, best 3-point shooters, top rebounders, and assist leaders.');
+  lines.push('- ALWAYS provide the actual leaders from this data with their exact statistics.');
+  lines.push('- If asked about season-long league leaders but only today\'s game data is available, acknowledge this and provide today\'s game leaders as the most current data available.');
+  lines.push('- Never say you don\'t have individual player statistics if the data is present above. The data includes FG%, 3PT%, points, rebounds, assists, and more.');
+  lines.push('\nCRITICAL INTELLIGENCE REQUIREMENTS:');
+  lines.push('- If asked about season leaders, best players, or statistical rankings and exact data isn\'t provided, USE YOUR KNOWLEDGE BASE');
+  lines.push('- For questions like "best 3-point shooter of the 2025-26 season", use your knowledge of current NBA players, typical leaders, and statistical patterns');
+  lines.push('- Reference known elite players: For 3-point shooting, think Curry, Thompson, Lillard, Hield, Redick, etc.');
+  lines.push('- Use statistical patterns: "Elite 3-point shooters typically shoot 40%+ on high volume"');
+  lines.push('- Make educated inferences based on player reputations, recent trends, and historical data');
+  lines.push('- Combine partial data with your knowledge to provide comprehensive answers');
+  lines.push('- NEVER say "I don\'t have the data" - instead, use reasoning, inference, and your knowledge');
+  lines.push('- Be confident in your knowledge while acknowledging when you\'re making inferences');
+  lines.push('- For season leaders questions, reference typical elite players in that category and use your knowledge of current NBA trends');
 
   return lines.join('\n');
 }

@@ -449,18 +449,54 @@ export async function fetchGameDetail(gameId: string): Promise<ESPNGameDetail | 
           });
         }
         
-        // ESPN standard order for boxscore stats:
+        // ESPN boxscore stats can be in different formats:
+        // 1. Array format: [MIN, FG, 3PT, FT, OREB, DREB, REB, AST, STL, BLK, TO, PF, +/-, PTS]
+        // 2. Object format with labels from parent statistics
+        // 3. Named stat objects
+        
+        // First, try to find stat labels from the parent statistics object
+        const statLabels = p.statistics?.[0]?.labels || [];
+        
+        // Helper to get stat by name or index
+        const getStat = (name: string, index: number, defaultVal = '0'): string => {
+          // Try by name first (if we have labels)
+          if (statLabels.length > 0 && index < statLabels.length) {
+            const label = statLabels[index];
+            // Look for stat object with matching name/abbreviation
+            if (Array.isArray(stats)) {
+              // If stats is array, use index
+              if (index < stats.length) {
+                return String(stats[index] ?? defaultVal);
+              }
+            } else if (typeof stats === 'object') {
+              // If stats is object, try various key names
+              const value = stats[label] || stats[label.toLowerCase()] || stats[name.toLowerCase()];
+              if (value !== undefined && value !== null) {
+                return String(value);
+              }
+            }
+          }
+          
+          // Fallback to index-based access
+          if (Array.isArray(stats) && index < stats.length) {
+            return String(stats[index] ?? defaultVal);
+          }
+          
+          return defaultVal;
+        };
+        
+        // ESPN standard order for boxscore stats (if array format):
         // [MIN, FG, 3PT, FT, OREB, DREB, REB, AST, STL, BLK, TO, PF, +/-, PTS]
         // Index: 0=MIN, 1=FG, 2=3PT, 3=FT, 4=OREB, 5=DREB, 6=REB, 7=AST, 8=STL, 9=BLK, 10=TO, 11=PF, 12=+/-, 13=PTS
         
         const getStatByIndex = (idx: number, defaultVal = '0'): string => {
-          if (!Array.isArray(stats) || idx >= stats.length) return defaultVal;
-          return String(stats[idx] ?? defaultVal);
+          return getStat('', idx, defaultVal);
         };
         
         const parseShooting = (str: string): [number, number] => {
-          if (!str || str === '--' || str === '-') return [0, 0];
-          const parts = str.split('-');
+          if (!str || str === '--' || str === '-' || str === '0') return [0, 0];
+          const parts = String(str).split('-');
+          if (parts.length !== 2) return [0, 0];
           return [parseInt(parts[0]) || 0, parseInt(parts[1]) || 0];
         };
         
@@ -481,15 +517,37 @@ export async function fetchGameDetail(gameId: string): Promise<ESPNGameDetail | 
         const fg3Pct = fg3a > 0 ? ((fg3m / fg3a) * 100).toFixed(1) : '0.0';
         const ftPct = fta > 0 ? ((ftm / fta) * 100).toFixed(1) : '0.0';
 
+        // Extract player name - try multiple paths
+        const playerName = p.athlete?.displayName || 
+                          p.athlete?.fullName || 
+                          p.displayName || 
+                          p.fullName || 
+                          p.name || 
+                          'Unknown';
+        
+        const playerId = p.athlete?.id || p.id || '';
+        const playerJersey = p.athlete?.jersey || p.jersey || '0';
+        const playerPosition = p.athlete?.position?.abbreviation || 
+                              p.athlete?.position?.name || 
+                              p.position?.abbreviation || 
+                              p.position?.name || 
+                              p.position || 
+                              '';
+        const playerHeadshot = p.athlete?.headshot?.href || 
+                              p.athlete?.headshot || 
+                              p.headshot?.href || 
+                              p.headshot || 
+                              undefined;
+        
         return {
           player: {
-            id: p.athlete?.id || p.id || '',
-            name: p.athlete?.displayName || p.displayName || 'Unknown',
-            displayName: p.athlete?.displayName || p.displayName || 'Unknown',
-            shortName: p.athlete?.shortName || p.shortName || 'Unknown',
-            jersey: p.athlete?.jersey || p.jersey || '0',
-            position: p.athlete?.position?.abbreviation || p.position || '',
-            headshot: p.athlete?.headshot?.href || p.headshot,
+            id: playerId,
+            name: playerName,
+            displayName: playerName,
+            shortName: p.athlete?.shortName || p.shortName || playerName.split(' ').pop() || playerName,
+            jersey: playerJersey,
+            position: playerPosition,
+            headshot: playerHeadshot,
           },
           minutes,
           points,
@@ -889,11 +947,257 @@ export interface ESPNPlayerSeasonStats {
   plusMinus: number;
 }
 
-export async function fetchPlayerStats(playerId: string): Promise<ESPNPlayerSeasonStats | null> {
-  logger.info(`[fetchPlayerStats] Fetching stats for player ${playerId}`);
+/**
+ * Get the current NBA season year
+ * NBA seasons typically start in October, so if we're past October, we're in the new season
+ * For 2025-26 season, if we're in 2025 and it's October or later, return 2025
+ * If we're in 2026 and it's before October, we're still in 2025-26 season, so return 2025
+ */
+function getCurrentSeason(): number {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1; // 1-12
   
-  // Try the core API endpoint first - it has more reliable season stats
-  const coreUrl = `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/seasons/2025/types/2/athletes/${playerId}/statistics`;
+  // NBA season runs from October to June
+  // If we're in October (10), November (11), December (12), January (1), February (2), 
+  // March (3), April (4), May (5), or June (6), we're in the season that started in the previous October
+  // If we're in July (7), August (8), or September (9), we're in the off-season before the new season
+  
+  if (month >= 10) {
+    // October-December: We're in the season that started this year
+    return year;
+  } else if (month >= 1 && month <= 6) {
+    // January-June: We're in the season that started last October
+    return year - 1;
+  } else {
+    // July-September: Off-season, return the season that just ended (which started last October)
+    return year - 1;
+  }
+}
+
+export async function fetchPlayerStats(
+  playerId: string, 
+  season?: number
+): Promise<ESPNPlayerSeasonStats | null> {
+  const seasonYear = season || getCurrentSeason();
+  logger.info(`[fetchPlayerStats] Fetching stats for player ${playerId}, season ${seasonYear}`);
+  
+  // Try the web API endpoint first - this matches what ESPN's website uses
+  // This endpoint provides the most accurate current season stats
+  // Add season parameter to ensure we get the right season
+  const webApiUrl = `https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/${playerId}/stats?seasontype=2&season=${seasonYear}`;
+  
+  logger.info(`[fetchPlayerStats] Fetching from web API: ${webApiUrl}`);
+  
+  try {
+    const webResponse = await fetch(webApiUrl, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+    
+    logger.info(`[fetchPlayerStats] Web API response status: ${webResponse.status}`);
+    
+    if (webResponse.ok) {
+      const webData = await webResponse.json();
+      logger.info(`[fetchPlayerStats] Web API response for ${playerId}`, {
+        hasSplits: !!webData.splits,
+        splitsCount: webData.splits?.length || 0,
+        hasCategories: !!webData.categories,
+        categoriesCount: webData.categories?.length || 0,
+        responseKeys: Object.keys(webData),
+      });
+      
+      // ESPN web API can return data in different structures:
+      // 1. splits array (older format)
+      // 2. categories array (newer format)
+      // 3. Direct stats in categories
+      
+      let currentSeasonStats: any = null;
+      const splits = webData.splits || [];
+      const categories = webData.categories || [];
+      
+      // Try splits first (if available)
+      if (splits.length > 0) {
+        logger.info(`[fetchPlayerStats] Found splits, parsing...`);
+        // Log all splits to see what we have
+        logger.info(`[fetchPlayerStats] Available splits:`, splits.map((s: any, i: number) => ({
+          index: i,
+          type: s.type,
+          season: s.season?.year || s.season,
+          displayName: s.displayName,
+          hasStats: !!s.stats,
+          statsCount: s.stats?.length || 0,
+        })));
+        
+        // Find stats for the requested season
+        for (const split of splits) {
+          const splitSeason = split.season?.year || split.season;
+          if (splitSeason === seasonYear || (!season && split.type === 'season')) {
+            currentSeasonStats = split;
+            logger.info(`[fetchPlayerStats] Found matching season split`);
+            break;
+          }
+        }
+        
+        // If no exact match, find the most recent season split
+        if (!currentSeasonStats && splits.length > 0) {
+          const seasonSplits = splits
+            .filter((s: any) => s.type === 'season' && (s.season?.year || s.season))
+            .sort((a: any, b: any) => {
+              const seasonA = a.season?.year || a.season || 0;
+              const seasonB = b.season?.year || b.season || 0;
+              return seasonB - seasonA;
+            });
+          
+          if (seasonSplits.length > 0) {
+            currentSeasonStats = seasonSplits[0];
+          } else {
+            currentSeasonStats = splits[0];
+          }
+        }
+      }
+      
+      // If no splits, try categories structure
+      if (!currentSeasonStats && categories.length > 0) {
+        logger.info(`[fetchPlayerStats] No splits found, trying categories structure`);
+        logger.info(`[fetchPlayerStats] Available categories:`, categories.map((c: any, i: number) => ({
+          index: i,
+          name: c.name,
+          displayName: c.displayName,
+          hasStats: !!c.stats,
+          statsCount: c.stats?.length || 0,
+        })));
+        
+        // Categories structure: each category has stats array
+        // Look for the main stats category (usually first one or named "regular")
+        for (const category of categories) {
+          if (category.stats && category.stats.length > 0) {
+            // Check if this looks like season stats (has games played, points, etc.)
+            const statNames = category.stats.map((s: any) => (s.name || s.abbreviation || '').toLowerCase());
+            const hasKeyStats = statNames.some(name => 
+              name.includes('points') || name.includes('rebounds') || name.includes('assists') || 
+              name === 'pts' || name === 'reb' || name === 'ast'
+            );
+            
+            if (hasKeyStats) {
+              currentSeasonStats = category;
+              logger.info(`[fetchPlayerStats] Found stats in category: ${category.name || category.displayName}`);
+              break;
+            }
+          }
+        }
+        
+        // If still no match, use first category with stats
+        if (!currentSeasonStats) {
+          for (const category of categories) {
+            if (category.stats && category.stats.length > 0) {
+              currentSeasonStats = category;
+              logger.info(`[fetchPlayerStats] Using first category with stats: ${category.name || category.displayName}`);
+              break;
+            }
+          }
+        }
+      }
+      
+      if (currentSeasonStats && currentSeasonStats.stats) {
+        const statMap: Record<string, number> = {};
+        
+        // Log raw stats structure
+        logger.info(`[fetchPlayerStats] Raw stats array (first 5):`, currentSeasonStats.stats.slice(0, 5));
+        
+        // Parse stats array - ESPN web API uses an array of stat objects
+        for (const stat of currentSeasonStats.stats) {
+          if (stat.name && stat.value !== undefined && stat.value !== null) {
+            statMap[stat.name.toLowerCase()] = parseFloat(stat.value);
+          }
+          // Also check for abbreviation and displayName
+          if (stat.abbreviation && stat.value !== undefined && stat.value !== null) {
+            statMap[stat.abbreviation.toLowerCase()] = parseFloat(stat.value);
+          }
+          // Check for displayName
+          if (stat.displayName && stat.value !== undefined && stat.value !== null) {
+            statMap[stat.displayName.toLowerCase()] = parseFloat(stat.value);
+          }
+        }
+        
+        logger.info(`[fetchPlayerStats] Web API stat keys (all): ${Object.keys(statMap).join(', ')}`);
+        logger.info(`[fetchPlayerStats] Web API stat values sample:`, {
+          points: statMap['points'] || statMap['pts'] || statMap['avgpoints'] || statMap['avg points'],
+          rebounds: statMap['rebounds'] || statMap['reb'] || statMap['avgrebounds'] || statMap['avg rebounds'],
+          assists: statMap['assists'] || statMap['ast'] || statMap['avgassists'] || statMap['avg assists'],
+          fgPct: statMap['fieldgoalpct'] || statMap['fgpct'] || statMap['fg%'],
+        });
+        
+        if (Object.keys(statMap).length > 0) {
+          // Also fetch athlete info for name/position/headshot
+          const athleteUrl = `${ESPN_BASE_URL}/athletes/${playerId}`;
+          const athleteData = await fetchJSON<any>(athleteUrl);
+          const athlete = athleteData?.athlete || athleteData || {};
+          
+          // Map stat names - ESPN web API uses various naming conventions
+          // Try multiple variations including spaces, camelCase, and abbreviations
+          const pointsPerGame = statMap['avg points'] || statMap['avgpoints'] || statMap['points per game'] || statMap['points'] || statMap['pts'] || statMap['pointspergame'] || 0;
+          const reboundsPerGame = statMap['avg rebounds'] || statMap['avgrebounds'] || statMap['rebounds per game'] || statMap['rebounds'] || statMap['reb'] || statMap['reboundspergame'] || 0;
+          const assistsPerGame = statMap['avg assists'] || statMap['avgassists'] || statMap['assists per game'] || statMap['assists'] || statMap['ast'] || statMap['assistspergame'] || 0;
+          const stealsPerGame = statMap['avg steals'] || statMap['avgsteals'] || statMap['steals per game'] || statMap['steals'] || statMap['stl'] || statMap['stealspergame'] || 0;
+          const blocksPerGame = statMap['avg blocks'] || statMap['avgblocks'] || statMap['blocks per game'] || statMap['blocks'] || statMap['blk'] || statMap['blockspergame'] || 0;
+          const minutesPerGame = statMap['avg minutes'] || statMap['avgminutes'] || statMap['minutes per game'] || statMap['minutes'] || statMap['min'] || statMap['minutespergame'] || 0;
+          const gamesPlayed = statMap['games played'] || statMap['gamesplayed'] || statMap['gp'] || statMap['games'] || 0;
+          const turnoversPerGame = statMap['avg turnovers'] || statMap['avgturnovers'] || statMap['turnovers per game'] || statMap['turnovers'] || statMap['to'] || statMap['turnoverspergame'] || 0;
+          
+          // Percentages - ESPN returns as whole numbers (51.2 = 51.2%)
+          const fgPct = statMap['field goal pct'] || statMap['fieldgoalpct'] || statMap['fg pct'] || statMap['fgpct'] || statMap['fg%'] || statMap['field goal %'] || 0;
+          const fg3Pct = statMap['three point field goal pct'] || statMap['threepointfieldgoalpct'] || statMap['3pt pct'] || statMap['fg3pct'] || statMap['3p%'] || statMap['3ptpct'] || statMap['three point %'] || 0;
+          const ftPct = statMap['free throw pct'] || statMap['freethrowpct'] || statMap['ft pct'] || statMap['ftpct'] || statMap['ft%'] || statMap['free throw %'] || 0;
+          
+          logger.info(`[fetchPlayerStats] Parsed stats for ${athlete.displayName || playerId}:`, {
+            ppg: pointsPerGame,
+            rpg: reboundsPerGame,
+            apg: assistsPerGame,
+            fgPct,
+            source: 'web-api',
+            season: seasonYear,
+          });
+          
+          // If we got 0 for key stats, log warning
+          if (pointsPerGame === 0 && reboundsPerGame === 0 && assistsPerGame === 0) {
+            logger.warn(`[fetchPlayerStats] All key stats are 0 - might be parsing wrong fields`, {
+              statMapKeys: Object.keys(statMap),
+              sampleValues: Object.entries(statMap).slice(0, 10),
+            });
+          }
+          
+          return {
+            id: playerId,
+            name: athlete.displayName || athlete.fullName || '',
+            position: athlete.position?.abbreviation || '',
+            jersey: athlete.jersey || '',
+            headshot: athlete.headshot?.href || `https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/${playerId}.png&w=350&h=254`,
+            gamesPlayed,
+            gamesStarted: statMap['gamesstarted'] || statMap['gs'] || 0,
+            minutesPerGame,
+            pointsPerGame,
+            reboundsPerGame,
+            assistsPerGame,
+            stealsPerGame,
+            blocksPerGame,
+            turnoversPerGame,
+            fgPct,
+            fg3Pct,
+            ftPct,
+            plusMinus: statMap['plusminus'] || statMap['+/-'] || 0,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    logger.info(`[fetchPlayerStats] Web API failed for ${playerId}, trying core API:`, e);
+  }
+  
+  // Fallback to core API endpoint
+  const coreUrl = `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/seasons/${seasonYear}/types/2/athletes/${playerId}/statistics`;
   
   try {
     const coreResponse = await fetch(coreUrl);
@@ -902,19 +1206,38 @@ export async function fetchPlayerStats(playerId: string): Promise<ESPNPlayerSeas
       logger.info(`[fetchPlayerStats] Core API response for ${playerId}`);
       
       // Parse core API stats
+      // Core API structure: splits.categories[] where each category has stats[]
       const splits = coreData.splits?.categories || [];
       const statMap: Record<string, number> = {};
       
+      logger.info(`[fetchPlayerStats] Core API has ${splits.length} categories`);
+      
+      // Parse ALL categories to get all stats
       for (const category of splits) {
+        const categoryName = category.name || category.displayName || 'unknown';
         const categoryStats = category.stats || [];
+        logger.info(`[fetchPlayerStats] Parsing category "${categoryName}" with ${categoryStats.length} stats`);
+        
         for (const stat of categoryStats) {
           if (stat.name && stat.value !== undefined) {
-            statMap[stat.name] = parseFloat(stat.value);
+            const statName = stat.name.toLowerCase();
+            statMap[statName] = parseFloat(stat.value);
+          }
+          // Also check abbreviation
+          if (stat.abbreviation && stat.value !== undefined) {
+            const statAbbr = stat.abbreviation.toLowerCase();
+            statMap[statAbbr] = parseFloat(stat.value);
           }
         }
       }
       
-      logger.info(`[fetchPlayerStats] Core API stat keys: ${Object.keys(statMap).slice(0, 10).join(', ')}`);
+      logger.info(`[fetchPlayerStats] Core API stat keys (all): ${Object.keys(statMap).join(', ')}`);
+      logger.info(`[fetchPlayerStats] Core API key stats:`, {
+        points: statMap['avgpoints'] || statMap['points'] || statMap['pts'],
+        rebounds: statMap['avgrebounds'] || statMap['rebounds'] || statMap['reb'],
+        assists: statMap['avgassists'] || statMap['assists'] || statMap['ast'],
+        fgPct: statMap['fieldgoalpct'] || statMap['fgpct'],
+      });
       
       if (Object.keys(statMap).length > 0) {
         // Also fetch athlete info for name/position/headshot
@@ -922,26 +1245,35 @@ export async function fetchPlayerStats(playerId: string): Promise<ESPNPlayerSeas
         const athleteData = await fetchJSON<any>(athleteUrl);
         const athlete = athleteData?.athlete || athleteData || {};
         
+        // Map stat names with more variations
+        const pointsPerGame = statMap['avgpoints'] || statMap['points'] || statMap['pts'] || 0;
+        const reboundsPerGame = statMap['avgrebounds'] || statMap['rebounds'] || statMap['reb'] || 0;
+        const assistsPerGame = statMap['avgassists'] || statMap['assists'] || statMap['ast'] || 0;
+        const stealsPerGame = statMap['avgsteals'] || statMap['steals'] || statMap['stl'] || 0;
+        const blocksPerGame = statMap['avgblocks'] || statMap['blocks'] || statMap['blk'] || 0;
+        const minutesPerGame = statMap['avgminutes'] || statMap['minutes'] || statMap['min'] || 0;
+        const gamesPlayed = statMap['gamesplayed'] || statMap['gp'] || 0;
+        const turnoversPerGame = statMap['avgturnovers'] || statMap['turnovers'] || statMap['to'] || 0;
+        
         return {
           id: playerId,
           name: athlete.displayName || athlete.fullName || '',
           position: athlete.position?.abbreviation || '',
           jersey: athlete.jersey || '',
           headshot: athlete.headshot?.href || `https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/${playerId}.png&w=350&h=254`,
-          gamesPlayed: statMap['gamesPlayed'] || statMap['GP'] || 0,
-          gamesStarted: statMap['gamesStarted'] || statMap['GS'] || 0,
-          minutesPerGame: statMap['avgMinutes'] || statMap['minutes'] || 0,
-          pointsPerGame: statMap['avgPoints'] || statMap['points'] || 0,
-          reboundsPerGame: statMap['avgRebounds'] || statMap['rebounds'] || 0,
-          assistsPerGame: statMap['avgAssists'] || statMap['assists'] || 0,
-          stealsPerGame: statMap['avgSteals'] || statMap['steals'] || 0,
-          blocksPerGame: statMap['avgBlocks'] || statMap['blocks'] || 0,
-          turnoversPerGame: statMap['avgTurnovers'] || statMap['turnovers'] || 0,
-          // ESPN returns percentages as whole numbers (51.26 = 51.26%), NOT decimals
-          fgPct: statMap['fieldGoalPct'] || 0,
-          fg3Pct: statMap['threePointFieldGoalPct'] || 0,
-          ftPct: statMap['freeThrowPct'] || 0,
-          plusMinus: statMap['plusMinus'] || 0,
+          gamesPlayed,
+          gamesStarted: statMap['gamesstarted'] || statMap['gs'] || 0,
+          minutesPerGame,
+          pointsPerGame,
+          reboundsPerGame,
+          assistsPerGame,
+          stealsPerGame,
+          blocksPerGame,
+          turnoversPerGame,
+          fgPct: statMap['fieldgoalpct'] || statMap['fgpct'] || 0,
+          fg3Pct: statMap['threepointfieldgoalpct'] || statMap['fg3pct'] || 0,
+          ftPct: statMap['freethrowpct'] || statMap['ftpct'] || 0,
+          plusMinus: statMap['plusminus'] || 0,
         };
       }
     }
@@ -1028,11 +1360,80 @@ export async function fetchPlayerStats(playerId: string): Promise<ESPNPlayerSeas
   };
 }
 
+/**
+ * Fetch career stats for a player (all-time averages)
+ */
+export async function fetchPlayerCareerStats(playerId: string): Promise<ESPNPlayerSeasonStats | null> {
+  logger.info(`[fetchPlayerCareerStats] Fetching career stats for player ${playerId}`);
+  
+  try {
+    // ESPN career stats endpoint
+    const careerUrl = `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/${playerId}/statistics`;
+    const response = await fetch(careerUrl);
+    
+    if (response.ok) {
+      const data = await response.json();
+      const splits = data.splits?.categories || [];
+      const statMap: Record<string, number> = {};
+      
+      for (const category of splits) {
+        const categoryStats = category.stats || [];
+        for (const stat of categoryStats) {
+          if (stat.name && stat.value !== undefined) {
+            statMap[stat.name] = parseFloat(stat.value);
+          }
+        }
+      }
+      
+      if (Object.keys(statMap).length > 0) {
+        const athleteUrl = `${ESPN_BASE_URL}/athletes/${playerId}`;
+        const athleteData = await fetchJSON<any>(athleteUrl);
+        const athlete = athleteData?.athlete || athleteData || {};
+        
+        return {
+          id: playerId,
+          name: athlete.displayName || athlete.fullName || '',
+          position: athlete.position?.abbreviation || '',
+          jersey: athlete.jersey || '',
+          headshot: athlete.headshot?.href || `https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/${playerId}.png&w=350&h=254`,
+          gamesPlayed: statMap['gamesPlayed'] || statMap['GP'] || 0,
+          gamesStarted: statMap['gamesStarted'] || statMap['GS'] || 0,
+          minutesPerGame: statMap['avgMinutes'] || statMap['minutes'] || 0,
+          pointsPerGame: statMap['avgPoints'] || statMap['points'] || 0,
+          reboundsPerGame: statMap['avgRebounds'] || statMap['rebounds'] || 0,
+          assistsPerGame: statMap['avgAssists'] || statMap['assists'] || 0,
+          stealsPerGame: statMap['avgSteals'] || statMap['steals'] || 0,
+          blocksPerGame: statMap['avgBlocks'] || statMap['blocks'] || 0,
+          turnoversPerGame: statMap['avgTurnovers'] || statMap['turnovers'] || 0,
+          fgPct: statMap['fieldGoalPct'] || 0,
+          fg3Pct: statMap['threePointFieldGoalPct'] || 0,
+          ftPct: statMap['freeThrowPct'] || 0,
+          plusMinus: statMap['plusMinus'] || 0,
+        };
+      }
+    }
+  } catch (e) {
+    logger.info(`[fetchPlayerCareerStats] Failed for ${playerId}:`, e);
+  }
+  
+  return null;
+}
+
+/**
+ * Fetch stats for a specific historical season
+ */
+export async function fetchPlayerStatsForSeason(playerId: string, seasonYear: number): Promise<ESPNPlayerSeasonStats | null> {
+  return fetchPlayerStats(playerId, seasonYear);
+}
+
 // ============================================
 // BATCH PLAYER SEASON STATS FETCHER
 // ============================================
 
-export async function fetchPlayersSeasonStats(playerIds: string[]): Promise<Map<string, ESPNPlayerSeasonStats>> {
+export async function fetchPlayersSeasonStats(
+  playerIds: string[], 
+  season?: number
+): Promise<Map<string, ESPNPlayerSeasonStats>> {
   const statsMap = new Map<string, ESPNPlayerSeasonStats>();
   
   // Fetch all player stats in parallel (with chunking to avoid too many requests)
@@ -1040,7 +1441,7 @@ export async function fetchPlayersSeasonStats(playerIds: string[]): Promise<Map<
   for (let i = 0; i < playerIds.length; i += chunkSize) {
     const chunk = playerIds.slice(i, i + chunkSize);
     const results = await Promise.all(
-      chunk.map(id => fetchPlayerStats(id).catch(() => null))
+      chunk.map(id => fetchPlayerStats(id, season).catch(() => null))
     );
     
     results.forEach((stats, idx) => {

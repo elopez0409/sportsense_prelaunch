@@ -124,7 +124,7 @@ export interface VisualLeadersData {
 }
 
 export type AIVisualResponse = 
-  | { type: 'games'; data: VisualGameData[] }
+  | { type: 'games'; data: VisualGameData[]; dateDisplay?: string }
   | { type: 'game'; data: VisualGameData }
   | { type: 'player'; data: VisualPlayerData }
   | { type: 'players'; data: VisualPlayerData[] }
@@ -256,18 +256,47 @@ export function GameCard({ game }: { game: VisualGameData }) {
 // GAMES GRID COMPONENT
 // ============================================
 
-export function GamesGrid({ games, title }: { games: VisualGameData[]; title?: string }) {
+export function GamesGrid({ games, title, dateDisplay }: { games: VisualGameData[]; title?: string; dateDisplay?: string }) {
   if (games.length === 0) return null;
+
+  // Generate title based on date
+  let displayTitle = title || "Today's Games";
+  if (dateDisplay) {
+    if (dateDisplay === 'Today') {
+      displayTitle = "Today's Games";
+    } else if (dateDisplay === 'Tomorrow') {
+      displayTitle = "Tomorrow's Games";
+    } else if (dateDisplay === 'Yesterday') {
+      displayTitle = "Yesterday's Games";
+    } else {
+      // Parse date and format nicely
+      try {
+        const date = new Date(dateDisplay);
+        if (!isNaN(date.getTime())) {
+          const options: Intl.DateTimeFormatOptions = { 
+            weekday: 'long', 
+            month: 'long', 
+            day: 'numeric' 
+          };
+          const formattedDate = date.toLocaleDateString('en-US', options);
+          displayTitle = `${formattedDate}'s Games`;
+        } else {
+          // Use the dateDisplay string as-is
+          displayTitle = `${dateDisplay}'s Games`;
+        }
+      } catch {
+        displayTitle = `${dateDisplay}'s Games`;
+      }
+    }
+  }
 
   return (
     <div className="w-full my-4">
-      {title && (
-        <div className="flex items-center gap-2 mb-3">
-          <Calendar className="w-4 h-4 text-orange-400" />
-          <h3 className="text-sm font-semibold text-white">{title}</h3>
-          <span className="text-xs text-white/40">({games.length} games)</span>
-        </div>
-      )}
+      <div className="flex items-center gap-2 mb-3">
+        <Calendar className="w-4 h-4 text-orange-400" />
+        <h3 className="text-sm font-semibold text-white">{displayTitle}</h3>
+        <span className="text-xs text-white/40">({games.length} {games.length === 1 ? 'game' : 'games'})</span>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {games.map((game) => (
           <GameCard key={game.gameId} game={game} />
@@ -317,16 +346,34 @@ export function PlayerCard({ player }: { player: VisualPlayerData }) {
   const reb = useGameStats ? (player.gameStats?.rebounds || 0) : (player.stats.rpg || 0);
   const ast = useGameStats ? (player.gameStats?.assists || 0) : (player.stats.apg || 0);
   
-  // Calculate shooting percentages
-  const fgPct = useGameStats && player.gameStats?.fga && player.gameStats.fga > 0
-    ? ((player.gameStats.fgm / player.gameStats.fga) * 100).toFixed(1)
-    : player.stats.fgPct ? (player.stats.fgPct * 100).toFixed(1) : '0.0';
+  // Calculate shooting percentages with validation
+  // ESPN returns percentages as whole numbers (51.26 = 51.26%), NOT decimals
+  // So we only multiply by 100 if the value is < 1 (meaning it's a decimal)
+  const formatPercentage = (val: number | undefined, gameFgm?: number, gameFga?: number): string => {
+    if (gameFga && gameFga > 0 && gameFgm !== undefined) {
+      // Calculate from game stats
+      const pct = (gameFgm / gameFga) * 100;
+      return Math.max(0, Math.min(100, pct)).toFixed(1); // Clamp between 0-100
+    }
+    if (val === undefined || val === null) return '0.0';
+    // ESPN returns as percentage already (51.26), so only multiply if < 1
+    const pct = val > 1 ? val : val * 100;
+    return Math.max(0, Math.min(100, pct)).toFixed(1); // Clamp between 0-100
+  };
   
-  const fg3Pct = useGameStats && player.gameStats?.fg3a && player.gameStats.fg3a > 0
-    ? ((player.gameStats.fg3m / player.gameStats.fg3a) * 100).toFixed(1)
-    : player.stats.fg3Pct ? (player.stats.fg3Pct * 100).toFixed(1) : '0.0';
+  const fgPct = formatPercentage(
+    player.stats.fgPct,
+    player.gameStats?.fgm,
+    player.gameStats?.fga
+  );
   
-  const ftPct = player.stats.ftPct ? (player.stats.ftPct * 100).toFixed(1) : '0.0';
+  const fg3Pct = formatPercentage(
+    player.stats.fg3Pct,
+    player.gameStats?.fg3m,
+    player.gameStats?.fg3a
+  );
+  
+  const ftPct = formatPercentage(player.stats.ftPct);
 
   return (
     <div className="bg-gradient-to-br from-slate-800/80 to-slate-900/80 rounded-2xl border border-white/10 overflow-hidden max-w-md mx-auto">
@@ -729,9 +776,16 @@ export function ComparisonCard({ comparison }: { comparison: PlayerComparisonVis
     const bpg = player.stats?.bpg ?? 0;
     const mpg = player.stats?.mpg ?? 0;
     const gamesPlayed = player.stats?.gamesPlayed ?? 0;
-    const fgPct = player.stats?.fgPct ? (player.stats.fgPct * 100) : 0;
-    const fg3Pct = player.stats?.fg3Pct ? (player.stats.fg3Pct * 100) : 0;
-    const ftPct = player.stats?.ftPct ? (player.stats.ftPct * 100) : 0;
+    // ESPN returns percentages as whole numbers (51.26 = 51.26%), NOT decimals
+    // Only multiply by 100 if value is < 1 (meaning it's a decimal)
+    const formatPct = (val: number | undefined): number => {
+      if (val === undefined || val === null) return 0;
+      return val > 1 ? val : val * 100; // Already a percentage if > 1
+    };
+    
+    const fgPct = formatPct(player.stats?.fgPct);
+    const fg3Pct = formatPct(player.stats?.fg3Pct);
+    const ftPct = formatPct(player.stats?.ftPct);
 
     return (
       <div
@@ -872,7 +926,7 @@ export function ComparisonCard({ comparison }: { comparison: PlayerComparisonVis
 export function AIVisualRenderer({ visual }: { visual: AIVisualResponse }) {
   switch (visual.type) {
     case 'games':
-      return <GamesGrid games={visual.data} title="Today's Games" />;
+      return <GamesGrid games={visual.data} dateDisplay={visual.dateDisplay} />;
     case 'game':
       return <GameCard game={visual.data} />;
     case 'player':

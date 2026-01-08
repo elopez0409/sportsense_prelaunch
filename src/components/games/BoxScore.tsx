@@ -131,8 +131,7 @@ function TeamBoxScore({ stats, teamName }: TeamBoxScoreProps) {
                       : 'text-white/50'
                   )}
                 >
-                  {stat.plusMinus > 0 ? '+' : ''}
-                  {stat.plusMinus}
+                  {stat.plusMinus > 0 ? `+${stat.plusMinus}` : `${stat.plusMinus}`}
                 </td>
               </tr>
             ))}
@@ -142,6 +141,5 @@ function TeamBoxScore({ stats, teamName }: TeamBoxScoreProps) {
     </div>
   );
 }
-
 
 

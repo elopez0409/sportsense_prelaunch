@@ -149,9 +149,8 @@ export function useLiveGameUpdates(
 
   // Initial connection
   useEffect(() => {
-    const hasLiveGames = initialGames.some(g => g.status === 'live' || g.status === 'halftime');
-    
-    if (enabled && hasLiveGames) {
+    // Connect if enabled, regardless of game status (so we get updates when games start)
+    if (enabled) {
       connect();
     }
 
@@ -165,7 +164,7 @@ export function useLiveGameUpdates(
         reconnectTimeoutRef.current = null;
       }
     };
-  }, [enabled, connect, initialGames]);
+  }, [enabled, connect]);
 
   // Manual refresh function
   const refresh = useCallback(async () => {
