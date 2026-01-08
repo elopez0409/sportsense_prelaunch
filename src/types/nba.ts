@@ -21,7 +21,7 @@ export interface GameInfo {
   awayTeam: TeamInfo;
   homeScore: number | null;
   awayScore: number | null;
-  status: 'SCHEDULED' | 'LIVE' | 'FINAL' | 'POSTPONED' | 'CANCELLED';
+  status: 'SCHEDULED' | 'LIVE' | 'FINAL' | 'POSTPONED' | 'CANCELLED' | 'HALFTIME';
   period: number | null;
   gameClock: string | null;
   scheduledAt: Date;

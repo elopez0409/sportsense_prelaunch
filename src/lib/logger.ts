@@ -1,5 +1,8 @@
 // Structured logging utility for production observability
 
+import { promises as fs } from 'fs';
+import path from 'path';
+
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 interface LogEntry {
@@ -107,6 +110,28 @@ function log(
   }
 }
 
+const LOG_DIR = process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+const AI_ERROR_LOG = process.env.AI_ERROR_LOG || path.join(LOG_DIR, 'ai-errors.log');
+let logDirReady: Promise<void> | null = null;
+
+async function ensureLogDir(): Promise<void> {
+  if (!logDirReady) {
+    logDirReady = fs.mkdir(LOG_DIR, { recursive: true }).catch(() => {});
+  }
+  await logDirReady;
+}
+
+async function appendLog(filePath: string, entry: LogEntry): Promise<void> {
+  if (process.env.NEXT_RUNTIME === 'edge') return;
+  await ensureLogDir();
+  const formatted = formatLog(entry);
+  try {
+    await fs.appendFile(filePath, `${formatted}\n`);
+  } catch {
+    // Avoid throwing from logging
+  }
+}
+
 // ============================================
 // PUBLIC LOGGER API
 // ============================================
@@ -145,8 +170,16 @@ export const logger = {
     invoke: (model: string, promptType: string, context?: Record<string, unknown>) =>
       log('info', `Gemini ${model}: ${promptType}`, { ...context, subsystem: 'ai' }),
     
-    error: (model: string, promptType: string, error: Error, context?: Record<string, unknown>) =>
-      log('error', `Gemini ${model}: ${promptType} failed`, { ...context, subsystem: 'ai' }, error),
+    error: (model: string, promptType: string, error: Error, context?: Record<string, unknown>) => {
+      const entry = createLogEntry(
+        'error',
+        `Gemini ${model}: ${promptType} failed`,
+        { ...context, subsystem: 'ai' },
+        error
+      );
+      log('error', entry.message, entry.context, error);
+      void appendLog(AI_ERROR_LOG, entry);
+    },
   },
   
   cache: {
@@ -159,6 +192,5 @@ export const logger = {
 };
 
 export default logger;
-
 
 
