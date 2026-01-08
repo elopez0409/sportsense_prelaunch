@@ -85,16 +85,54 @@ export function AIInsightModal({
         }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error?.message || 'Failed to fetch AI insight');
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
       }
 
-      const content = data.data.summary;
+      if (response.ok && data?.success) {
+        const content = data.data.summary;
+        setInsight(content);
+
+        // Cache the result
+        insightCache.set(cacheKey, {
+          content,
+          timestamp: Date.now(),
+          status: gameStatus,
+        });
+        return;
+      }
+
+      const chatResponse = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Write a ${summaryType === 'final' ? 'final recap' : summaryType === 'halftime' ? 'halftime report' : 'pregame preview'} for ${awayTeam} @ ${homeTeam}.`,
+          type: 'game',
+          length: 'short',
+          requestVisuals: false,
+          gameContext: {
+            homeTeam,
+            awayTeam,
+            homeScore: homeScore ?? null,
+            awayScore: awayScore ?? null,
+            period: null,
+            gameClock: null,
+            status: gameStatus,
+          },
+        }),
+      });
+
+      const chatData = await chatResponse.json();
+      if (!chatResponse.ok || !chatData?.response) {
+        throw new Error(data?.error?.message || 'Failed to fetch AI insight');
+      }
+
+      const content = chatData.response;
       setInsight(content);
 
-      // Cache the result
       insightCache.set(cacheKey, {
         content,
         timestamp: Date.now(),
@@ -105,7 +143,17 @@ export function AIInsightModal({
     } finally {
       setIsLoading(false);
     }
-  }, [gameId, getCacheKey, getSummaryType, gameStatus]);
+  }, [
+    gameId,
+    getCacheKey,
+    getSummaryType,
+    gameStatus,
+    homeTeam,
+    awayTeam,
+    homeScore,
+    awayScore,
+    gameDate,
+  ]);
 
   // Fetch insight when modal opens
   useEffect(() => {

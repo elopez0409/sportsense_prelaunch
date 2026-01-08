@@ -6,7 +6,7 @@ import { prisma } from '@/lib/db';
 import { aiRateLimiter, getCache, setCache } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { generateGameSummary, generatePregamePreview, isAIAvailable } from '@/services/ai/gemini';
-import { fetchLiveScores, fetchScoresByDate } from '@/services/nba/live-data';
+import { fetchGameBoxscore, fetchLiveScores, fetchScoresByDate } from '@/services/nba/live-data';
 import type { AIGameContext, APIResponse } from '@/types/nba';
 
 export const dynamic = 'force-dynamic';
@@ -106,17 +106,45 @@ async function buildContextFromLiveData(params: {
 
   if (!target) return null;
 
-  const homeLeaders = {
+  let homeLeaders = {
     points: parseLeaderValue(target.leaders?.home.points || undefined) || undefined,
     rebounds: parseLeaderValue(target.leaders?.home.rebounds || undefined) || undefined,
     assists: parseLeaderValue(target.leaders?.home.assists || undefined) || undefined,
   };
 
-  const awayLeaders = {
+  let awayLeaders = {
     points: parseLeaderValue(target.leaders?.away.points || undefined) || undefined,
     rebounds: parseLeaderValue(target.leaders?.away.rebounds || undefined) || undefined,
     assists: parseLeaderValue(target.leaders?.away.assists || undefined) || undefined,
   };
+
+  const needsBoxscore =
+    !homeLeaders.points || !homeLeaders.rebounds || !homeLeaders.assists ||
+    !awayLeaders.points || !awayLeaders.rebounds || !awayLeaders.assists;
+
+  if (needsBoxscore) {
+    const boxscore = await fetchGameBoxscore(target.gameId);
+    if (boxscore) {
+      const topBy = (players: { points: number; rebounds: number; assists: number; name: string }[], key: 'points' | 'rebounds' | 'assists') => {
+        if (!players.length) return undefined;
+        const leader = players.reduce((max, p) => (p[key] > max[key] ? p : max));
+        if (!leader[key]) return undefined;
+        return { player: leader.name, value: leader[key] };
+      };
+
+      homeLeaders = {
+        points: homeLeaders.points || topBy(boxscore.homePlayers, 'points'),
+        rebounds: homeLeaders.rebounds || topBy(boxscore.homePlayers, 'rebounds'),
+        assists: homeLeaders.assists || topBy(boxscore.homePlayers, 'assists'),
+      };
+
+      awayLeaders = {
+        points: awayLeaders.points || topBy(boxscore.awayPlayers, 'points'),
+        rebounds: awayLeaders.rebounds || topBy(boxscore.awayPlayers, 'rebounds'),
+        assists: awayLeaders.assists || topBy(boxscore.awayPlayers, 'assists'),
+      };
+    }
+  }
 
   const context: AIGameContext = {
     game: {

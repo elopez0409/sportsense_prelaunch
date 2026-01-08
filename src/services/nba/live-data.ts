@@ -622,7 +622,7 @@ export interface GameBoxscore {
 }
 
 // Fetch detailed boxscore for a specific game
-async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | null> {
+export async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | null> {
   const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`;
   
   try {

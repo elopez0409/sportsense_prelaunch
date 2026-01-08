@@ -21,6 +21,7 @@ export interface Notification {
   awayTeam?: string;
   homeScore?: number;
   awayScore?: number;
+  gameDate?: string;
   hasAIInsight?: boolean;
   aiInsightPreview?: string;
 }
@@ -127,12 +128,26 @@ function NotificationToast({ notification, onClose, onViewInsight }: Notificatio
 }
 
 // Fetch AI insight for a game
-async function fetchAIInsight(gameId: string, type: 'halftime' | 'final'): Promise<string | null> {
+async function fetchAIInsight(
+  gameId: string,
+  type: 'halftime' | 'final',
+  options?: {
+    homeTeamAbbr?: string;
+    awayTeamAbbr?: string;
+    gameDate?: string;
+  }
+): Promise<string | null> {
   try {
     const response = await fetch('/api/ai/summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameId, type }),
+      body: JSON.stringify({
+        gameId,
+        type,
+        homeTeamAbbr: options?.homeTeamAbbr,
+        awayTeamAbbr: options?.awayTeamAbbr,
+        gameDate: options?.gameDate,
+      }),
     });
 
     if (!response.ok) return null;
@@ -166,6 +181,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     awayTeam: string;
     homeScore?: number;
     awayScore?: number;
+    gameDate?: string;
   } | null>(null);
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -259,6 +275,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         awayTeam: notification.awayTeam || '',
         homeScore: notification.homeScore,
         awayScore: notification.awayScore,
+        gameDate: notification.gameDate,
       });
     }
   }, []);
@@ -298,7 +315,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             gameStates.set(game.gameId, state);
 
             // Fetch AI insight in the background
-            fetchAIInsight(game.gameId, 'halftime').then((aiInsight) => {
+            fetchAIInsight(game.gameId, 'halftime', {
+              homeTeamAbbr: game.homeTeam.abbreviation,
+              awayTeamAbbr: game.awayTeam.abbreviation,
+              gameDate: game.gameDate,
+            }).then((aiInsight) => {
               state.fetchingAI = false;
               
               addNotification({
@@ -312,6 +333,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 awayTeam: game.awayTeam.abbreviation,
                 homeScore: game.homeTeam.score,
                 awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
                 hasAIInsight: !!aiInsight,
                 aiInsightPreview: aiInsight ? truncateForPreview(aiInsight) : undefined,
               });
@@ -327,7 +349,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             const winner = game.homeTeam.score > game.awayTeam.score ? game.homeTeam : game.awayTeam;
 
             // Fetch AI insight in the background
-            fetchAIInsight(game.gameId, 'final').then((aiInsight) => {
+            fetchAIInsight(game.gameId, 'final', {
+              homeTeamAbbr: game.homeTeam.abbreviation,
+              awayTeamAbbr: game.awayTeam.abbreviation,
+              gameDate: game.gameDate,
+            }).then((aiInsight) => {
               state.fetchingAI = false;
               
               addNotification({
@@ -341,6 +367,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 awayTeam: game.awayTeam.abbreviation,
                 homeScore: game.homeTeam.score,
                 awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
                 hasAIInsight: !!aiInsight,
                 aiInsightPreview: aiInsight ? truncateForPreview(aiInsight) : undefined,
               });
@@ -362,6 +389,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 awayTeam: game.awayTeam.abbreviation,
                 homeScore: game.homeTeam.score,
                 awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
                 hasAIInsight: true, // Can view live insights
               });
               state.notifiedCloseGame = true;
@@ -442,6 +470,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           awayTeam={insightModal.awayTeam}
           homeScore={insightModal.homeScore}
           awayScore={insightModal.awayScore}
+          gameDate={insightModal.gameDate}
         />
       )}
     </NotificationContext.Provider>
