@@ -406,9 +406,9 @@ export function EnhancedPlayerStats({
                       <StatBox label="FT" value={`${player.ftm}-${player.fta}`} subtext={player.ftPct} />
                       <StatBox 
                         label="+/-" 
-                        value={parseInt(player.plusMinus) > 0 ? `+${player.plusMinus}` : player.plusMinus}
-                        highlight={parseInt(player.plusMinus) > 0}
-                        negative={parseInt(player.plusMinus) < 0}
+                        value={(parseInt(player.plusMinus) || 0) > 0 ? `+${parseInt(player.plusMinus) || 0}` : `${parseInt(player.plusMinus) || 0}`}
+                        highlight={(parseInt(player.plusMinus) || 0) > 0}
+                        negative={(parseInt(player.plusMinus) || 0) < 0}
                       />
                     </div>
                   )}
@@ -499,6 +499,5 @@ function ComparisonRow({
     </div>
   );
 }
-
 
 

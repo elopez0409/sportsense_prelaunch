@@ -157,7 +157,7 @@ export function PlayerStatsTable({ players, teamColor = '333' }: PlayerStatsTabl
           plusMinusNum > 0 ? 'text-green-400' : 
           plusMinusNum < 0 ? 'text-red-400' : 'text-white/60'
         }`}>
-          {plusMinusNum > 0 ? '+' : ''}{player.plusMinus}
+          {plusMinusNum > 0 ? `+${plusMinusNum}` : `${plusMinusNum}`}
         </td>
       </tr>
     );
@@ -286,6 +286,5 @@ export function PlayerStatsTable({ players, teamColor = '333' }: PlayerStatsTabl
     </div>
   );
 }
-
 
 
