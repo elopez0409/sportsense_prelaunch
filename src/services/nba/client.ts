@@ -17,7 +17,8 @@ import type {
 // CONFIGURATION
 // ============================================
 
-const BALL_DONT_LIE_BASE = 'https://api.balldontlie.io/v1';
+const BALL_DONT_LIE_V2 = 'https://api.balldontlie.io/v1';
+const BALL_DONT_LIE_LEGACY = 'https://www.balldontlie.io/api/v1';
 const NBA_STATS_BASE = 'https://stats.nba.com/stats';
 
 // Rate limiting state (in-memory for now, Redis for production)
@@ -45,7 +46,11 @@ async function fetchBDL<T>(
 ): Promise<T> {
   await rateLimitBDL();
 
-  const url = new URL(`${BALL_DONT_LIE_BASE}${endpoint}`);
+  // Use V2 (with key) or Legacy (without key)
+  const useV2 = !!process.env.BALLDONTLIE_API_KEY;
+  const baseUrl = useV2 ? BALL_DONT_LIE_V2 : BALL_DONT_LIE_LEGACY;
+  const url = new URL(`${baseUrl}${endpoint}`);
+  
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, String(value));
   });
@@ -55,11 +60,11 @@ async function fetchBDL<T>(
   };
 
   // Add API key if available
-  if (process.env.BALLDONTLIE_API_KEY) {
+  if (useV2 && process.env.BALLDONTLIE_API_KEY) {
     headers['Authorization'] = process.env.BALLDONTLIE_API_KEY;
   }
 
-  logger.data.sync('balldontlie', `GET ${endpoint}`, { params });
+  logger.data.sync('balldontlie', `GET ${endpoint} (${useV2 ? 'V2' : 'Legacy'})`, { params });
 
   const response = await retry(
     async () => {
