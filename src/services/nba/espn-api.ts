@@ -1129,3 +1129,111 @@ export async function fetchTeamPreviousGames(teamId: string, limit: number = 5):
   return games;
 }
 
+// ============================================
+// SCOREBOARD / GAMES LIST FETCHER
+// ============================================
+
+export interface ESPNScoreboardGame {
+  id: string;
+  date: string;
+  status: 'scheduled' | 'live' | 'halftime' | 'final' | 'postponed';
+  period: number;
+  clock: string;
+  homeTeam: {
+    id: string;
+    abbreviation: string;
+    displayName: string;
+    logo: string;
+    score: number;
+    record?: string;
+  };
+  awayTeam: {
+    id: string;
+    abbreviation: string;
+    displayName: string;
+    logo: string;
+    score: number;
+    record?: string;
+  };
+}
+
+export async function fetchScoreboard(date?: string): Promise<ESPNScoreboardGame[]> {
+  // If no date provided, use today
+  const dateStr = date || new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const formattedDate = date ? date.replace(/-/g, '') : dateStr;
+  
+  const url = `${ESPN_BASE_URL}/scoreboard?dates=${formattedDate}`;
+  const data = await fetchJSON<any>(url);
+  
+  if (!data?.events) {
+    return [];
+  }
+
+  const games: ESPNScoreboardGame[] = [];
+  
+  for (const event of data.events) {
+    const competition = event.competitions?.[0];
+    if (!competition) continue;
+
+    const homeComp = competition.competitors?.find((c: any) => c.homeAway === 'home');
+    const awayComp = competition.competitors?.find((c: any) => c.homeAway === 'away');
+    
+    if (!homeComp || !awayComp) continue;
+
+    // Parse status
+    const statusType = competition.status?.type?.name?.toLowerCase() || '';
+    let status: ESPNScoreboardGame['status'] = 'scheduled';
+    if (statusType.includes('in_progress') || statusType === 'in progress') status = 'live';
+    else if (statusType === 'halftime') status = 'halftime';
+    else if (statusType.includes('final')) status = 'final';
+    else if (statusType.includes('postponed')) status = 'postponed';
+
+    games.push({
+      id: event.id,
+      date: event.date,
+      status,
+      period: competition.status?.period || 0,
+      clock: competition.status?.displayClock || '',
+      homeTeam: {
+        id: homeComp.id || homeComp.team?.id,
+        abbreviation: homeComp.team?.abbreviation || '???',
+        displayName: homeComp.team?.displayName || homeComp.team?.name || 'Unknown',
+        logo: homeComp.team?.logos?.[0]?.href || `https://a.espncdn.com/i/teamlogos/nba/500/${homeComp.team?.abbreviation?.toLowerCase()}.png`,
+        score: parseInt(homeComp.score || '0'),
+        record: homeComp.records?.[0]?.summary,
+      },
+      awayTeam: {
+        id: awayComp.id || awayComp.team?.id,
+        abbreviation: awayComp.team?.abbreviation || '???',
+        displayName: awayComp.team?.displayName || awayComp.team?.name || 'Unknown',
+        logo: awayComp.team?.logos?.[0]?.href || `https://a.espncdn.com/i/teamlogos/nba/500/${awayComp.team?.abbreviation?.toLowerCase()}.png`,
+        score: parseInt(awayComp.score || '0'),
+        record: awayComp.records?.[0]?.summary,
+      },
+    });
+  }
+
+  return games;
+}
+
+// Fetch games for a date range
+export async function fetchGamesForDateRange(startDate: string, endDate: string): Promise<ESPNScoreboardGame[]> {
+  const allGames: ESPNScoreboardGame[] = [];
+  
+  const current = new Date(startDate);
+  const end = new Date(endDate);
+  
+  while (current <= end) {
+    const dateStr = current.toISOString().split('T')[0];
+    try {
+      const games = await fetchScoreboard(dateStr);
+      allGames.push(...games);
+    } catch (error) {
+      logger.error('Failed to fetch scoreboard for date', { date: dateStr, error: (error as Error).message });
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return allGames;
+}
+

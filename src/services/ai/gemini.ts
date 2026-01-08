@@ -36,9 +36,9 @@ const SAFETY_SETTINGS = [
   },
 ];
 
-// Model selection - Using Gemini 1.5 Flash (stable and available)
-const FLASH_MODEL = 'gemini-1.5-flash';
-const PRO_MODEL = 'gemini-1.5-flash';
+// Model selection - Using Gemini 2.5 Flash (stable and available)
+const FLASH_MODEL = 'gemini-2.5-flash';
+const PRO_MODEL = 'gemini-2.5-flash';
 
 // ============================================
 // SYSTEM PROMPTS
@@ -458,4 +458,3 @@ Respond to the user's question using ONLY the data provided above.`;
 export function isAIAvailable(): boolean {
   return !!genAI;
 }
-

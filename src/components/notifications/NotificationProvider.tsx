@@ -1,7 +1,8 @@
 'use client';
 
 import { createContext, useContext, useCallback, useState, useEffect, ReactNode } from 'react';
-import { X, Zap, Trophy, AlertTriangle, Bell, Volume2 } from 'lucide-react';
+import { X, Zap, Trophy, AlertTriangle, Bell, Sparkles } from 'lucide-react';
+import { AIInsightModal } from '@/components/ai/AIInsightModal';
 
 export interface Notification {
   id: string;
@@ -13,6 +14,16 @@ export interface Notification {
   timestamp: Date;
   read: boolean;
   sound?: boolean;
+  // AI-enhanced notification fields
+  gameId?: string;
+  gameStatus?: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  homeScore?: number;
+  awayScore?: number;
+  gameDate?: string;
+  hasAIInsight?: boolean;
+  aiInsightPreview?: string;
 }
 
 interface NotificationContextType {
@@ -37,7 +48,13 @@ export function useNotifications() {
   return context;
 }
 
-function NotificationToast({ notification, onClose }: { notification: Notification; onClose: () => void }) {
+interface NotificationToastProps {
+  notification: Notification;
+  onClose: () => void;
+  onViewInsight?: () => void;
+}
+
+function NotificationToast({ notification, onClose, onViewInsight }: NotificationToastProps) {
   const iconMap = {
     score: Trophy,
     highlight: Zap,
@@ -55,9 +72,11 @@ function NotificationToast({ notification, onClose }: { notification: Notificati
   const Icon = iconMap[notification.type];
 
   useEffect(() => {
-    const timer = setTimeout(onClose, 5000);
+    // Longer timeout for AI-enhanced notifications
+    const timeout = notification.hasAIInsight ? 8000 : 5000;
+    const timer = setTimeout(onClose, timeout);
     return () => clearTimeout(timer);
-  }, [onClose]);
+  }, [onClose, notification.hasAIInsight]);
 
   return (
     <div className="notification-toast glass-dark rounded-xl p-4 w-80 shadow-2xl border border-white/10">
@@ -75,6 +94,27 @@ function NotificationToast({ notification, onClose }: { notification: Notificati
             )}
           </div>
           <p className="text-white/70 text-xs mt-1 line-clamp-2">{notification.message}</p>
+          
+          {/* AI Insight Preview */}
+          {notification.aiInsightPreview && (
+            <p className="text-purple-300/80 text-xs mt-2 line-clamp-2 italic">
+              ✨ {notification.aiInsightPreview}
+            </p>
+          )}
+          
+          {/* View AI Insight Button */}
+          {notification.hasAIInsight && notification.gameId && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewInsight?.();
+              }}
+              className="mt-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gradient-to-r from-orange-500/20 to-purple-500/20 border border-purple-500/30 hover:from-orange-500/30 hover:to-purple-500/30 transition-all text-xs text-purple-300"
+            >
+              <Sparkles className="w-3 h-3" />
+              View Full AI Insight
+            </button>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -87,10 +127,62 @@ function NotificationToast({ notification, onClose }: { notification: Notificati
   );
 }
 
+// Fetch AI insight for a game
+async function fetchAIInsight(
+  gameId: string,
+  type: 'halftime' | 'final',
+  options?: {
+    homeTeamAbbr?: string;
+    awayTeamAbbr?: string;
+    gameDate?: string;
+  }
+): Promise<string | null> {
+  try {
+    const response = await fetch('/api/ai/summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        gameId,
+        type,
+        homeTeamAbbr: options?.homeTeamAbbr,
+        awayTeamAbbr: options?.awayTeamAbbr,
+        gameDate: options?.gameDate,
+      }),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (!data.success) return null;
+
+    return data.data.summary;
+  } catch {
+    return null;
+  }
+}
+
+// Truncate text for preview
+function truncateForPreview(text: string, maxLength: number = 80): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength).trim() + '...';
+}
+
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  
+  // AI Insight Modal state
+  const [insightModal, setInsightModal] = useState<{
+    isOpen: boolean;
+    gameId: string;
+    gameStatus: string;
+    homeTeam: string;
+    awayTeam: string;
+    homeScore?: number;
+    awayScore?: number;
+    gameDate?: string;
+  } | null>(null);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -172,7 +264,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setToasts(prev => prev.filter(n => n.id !== id));
   }, []);
 
-  // Monitor for live game updates
+  // Open AI insight modal for a notification
+  const openInsightModal = useCallback((notification: Notification) => {
+    if (notification.gameId) {
+      setInsightModal({
+        isOpen: true,
+        gameId: notification.gameId,
+        gameStatus: notification.gameStatus || 'FINAL',
+        homeTeam: notification.homeTeam || '',
+        awayTeam: notification.awayTeam || '',
+        homeScore: notification.homeScore,
+        awayScore: notification.awayScore,
+        gameDate: notification.gameDate,
+      });
+    }
+  }, []);
+
+  // Monitor for live game updates with AI-enhanced notifications
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
     const gameStates = new Map<string, { 
@@ -180,6 +288,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       notifiedFinal: boolean;
       notifiedHalftime: boolean;
       notifiedCloseGame: boolean;
+      fetchingAI: boolean;
     }>();
 
     const checkForGameUpdates = async () => {
@@ -196,29 +305,73 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             notifiedFinal: false,
             notifiedHalftime: false,
             notifiedCloseGame: false,
+            fetchingAI: false,
           };
 
-          // Check for halftime
-          if (game.status === 'halftime' && !state.notifiedHalftime) {
-            addNotification({
-              type: 'info',
-              title: `⏸️ Halftime: ${game.awayTeam.abbreviation} @ ${game.homeTeam.abbreviation}`,
-              message: `Score: ${game.awayTeam.score} - ${game.homeTeam.score}`,
-              sport: 'NBA',
-            });
+          // Check for halftime with AI insight
+          if (game.status === 'halftime' && !state.notifiedHalftime && !state.fetchingAI) {
             state.notifiedHalftime = true;
+            state.fetchingAI = true;
+            gameStates.set(game.gameId, state);
+
+            // Fetch AI insight in the background
+            fetchAIInsight(game.gameId, 'halftime', {
+              homeTeamAbbr: game.homeTeam.abbreviation,
+              awayTeamAbbr: game.awayTeam.abbreviation,
+              gameDate: game.gameDate,
+            }).then((aiInsight) => {
+              state.fetchingAI = false;
+              
+              addNotification({
+                type: 'info',
+                title: `⏸️ Halftime: ${game.awayTeam.abbreviation} @ ${game.homeTeam.abbreviation}`,
+                message: `Score: ${game.awayTeam.score} - ${game.homeTeam.score}`,
+                sport: 'NBA',
+                gameId: game.gameId,
+                gameStatus: 'HALFTIME',
+                homeTeam: game.homeTeam.abbreviation,
+                awayTeam: game.awayTeam.abbreviation,
+                homeScore: game.homeTeam.score,
+                awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
+                hasAIInsight: !!aiInsight,
+                aiInsightPreview: aiInsight ? truncateForPreview(aiInsight) : undefined,
+              });
+            });
           }
 
-          // Check for final
-          if (game.status === 'final' && !state.notifiedFinal) {
-            const winner = game.homeTeam.score > game.awayTeam.score ? game.homeTeam : game.awayTeam;
-            addNotification({
-              type: 'score',
-              title: `🏆 ${winner.abbreviation} wins!`,
-              message: `Final: ${game.awayTeam.abbreviation} ${game.awayTeam.score} - ${game.homeTeam.abbreviation} ${game.homeTeam.score}`,
-              sport: 'NBA',
-            });
+          // Check for final with AI insight
+          if (game.status === 'final' && !state.notifiedFinal && !state.fetchingAI) {
             state.notifiedFinal = true;
+            state.fetchingAI = true;
+            gameStates.set(game.gameId, state);
+
+            const winner = game.homeTeam.score > game.awayTeam.score ? game.homeTeam : game.awayTeam;
+
+            // Fetch AI insight in the background
+            fetchAIInsight(game.gameId, 'final', {
+              homeTeamAbbr: game.homeTeam.abbreviation,
+              awayTeamAbbr: game.awayTeam.abbreviation,
+              gameDate: game.gameDate,
+            }).then((aiInsight) => {
+              state.fetchingAI = false;
+              
+              addNotification({
+                type: 'score',
+                title: `🏆 ${winner.abbreviation} wins!`,
+                message: `Final: ${game.awayTeam.abbreviation} ${game.awayTeam.score} - ${game.homeTeam.abbreviation} ${game.homeTeam.score}`,
+                sport: 'NBA',
+                gameId: game.gameId,
+                gameStatus: 'FINAL',
+                homeTeam: game.homeTeam.abbreviation,
+                awayTeam: game.awayTeam.abbreviation,
+                homeScore: game.homeTeam.score,
+                awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
+                hasAIInsight: !!aiInsight,
+                aiInsightPreview: aiInsight ? truncateForPreview(aiInsight) : undefined,
+              });
+            });
           }
 
           // Check for close game in 4th quarter
@@ -230,6 +383,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 title: `🔥 Close game!`,
                 message: `${game.awayTeam.abbreviation} ${game.awayTeam.score} - ${game.homeTeam.abbreviation} ${game.homeTeam.score} with ${game.clock} left!`,
                 sport: 'NBA',
+                gameId: game.gameId,
+                gameStatus: 'LIVE',
+                homeTeam: game.homeTeam.abbreviation,
+                awayTeam: game.awayTeam.abbreviation,
+                homeScore: game.homeTeam.score,
+                awayScore: game.awayTeam.score,
+                gameDate: game.gameDate,
+                hasAIInsight: true, // Can view live insights
               });
               state.notifiedCloseGame = true;
             }
@@ -261,8 +422,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const timer = setTimeout(() => {
       addNotification({
         type: 'info',
-        title: 'Welcome to Playmaker!',
-        message: 'Your AI sports companion is ready. You\'ll be notified about big plays and game updates!',
+        title: 'Welcome to SportSense!',
+        message: 'Your AI sports companion is ready. You\'ll get AI-powered insights at halftime and game end!',
         sport: 'ALL',
         sound: false,
       });
@@ -293,10 +454,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             notification={toast}
             onClose={() => removeToast(toast.id)}
+            onViewInsight={() => openInsightModal(toast)}
           />
         ))}
       </div>
+
+      {/* AI Insight Modal */}
+      {insightModal && (
+        <AIInsightModal
+          isOpen={insightModal.isOpen}
+          onClose={() => setInsightModal(null)}
+          gameId={insightModal.gameId}
+          gameStatus={insightModal.gameStatus}
+          homeTeam={insightModal.homeTeam}
+          awayTeam={insightModal.awayTeam}
+          homeScore={insightModal.homeScore}
+          awayScore={insightModal.awayScore}
+          gameDate={insightModal.gameDate}
+        />
+      )}
     </NotificationContext.Provider>
   );
 }
-
