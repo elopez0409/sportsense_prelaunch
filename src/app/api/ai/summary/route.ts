@@ -2,12 +2,45 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
-import { aiRateLimiter, getCache, setCache } from '@/lib/redis';
-import { logger } from '@/lib/logger';
 import { generateGameSummary, generatePregamePreview, isAIAvailable } from '@/services/ai/gemini';
 import { fetchGameBoxscore, fetchLiveScores, fetchScoresByDate } from '@/services/nba/live-data';
 import type { AIGameContext, APIResponse } from '@/types/nba';
+
+// Optional dependencies - wrap in try-catch to prevent route failure
+let prisma: any;
+let aiRateLimiter: any;
+let getCache: any;
+let setCache: any;
+let logger: any;
+
+try {
+  const dbModule = require('@/lib/db');
+  prisma = dbModule.prisma;
+} catch (e) {
+  console.warn('[AI Summary] Prisma not available:', e);
+}
+
+try {
+  const redisModule = require('@/lib/redis');
+  aiRateLimiter = redisModule.aiRateLimiter;
+  getCache = redisModule.getCache;
+  setCache = redisModule.setCache;
+} catch (e) {
+  console.warn('[AI Summary] Redis not available:', e);
+}
+
+try {
+  const loggerModule = require('@/lib/logger');
+  logger = loggerModule.logger || loggerModule.default;
+} catch (e) {
+  console.warn('[AI Summary] Logger not available:', e);
+  logger = {
+    api: {
+      request: () => {},
+      error: () => {},
+    },
+  };
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -231,12 +264,12 @@ async function buildGameContext(
 
   if (!game) return null;
 
-  const homeStats = game.playerStats.filter((s) => s.teamId === game.homeTeamId);
-  const awayStats = game.playerStats.filter((s) => s.teamId === game.awayTeamId);
+  const homeStats = game.playerStats.filter((s: typeof game.playerStats[0]) => s.teamId === game.homeTeamId);
+  const awayStats = game.playerStats.filter((s: typeof game.playerStats[0]) => s.teamId === game.awayTeamId);
 
   const getLeader = (stats: typeof homeStats, stat: 'points' | 'reb' | 'ast') => {
     if (stats.length === 0) return undefined;
-    const leader = stats.reduce((max, s) => (s[stat] > max[stat] ? s : max));
+    const leader = stats.reduce((max: typeof stats[0], s: typeof stats[0]) => (s[stat] > max[stat] ? s : max));
     return { player: leader.player.fullName, value: leader[stat] };
   };
 
@@ -251,7 +284,7 @@ async function buildGameContext(
       isLive: game.status === 'LIVE',
       venue: game.venue,
     },
-    recentPlays: game.plays.map((play) => ({
+    recentPlays: game.plays.map((play: typeof game.plays[0]) => ({
       description: play.description,
       period: play.period,
       clock: play.gameClock,
@@ -283,18 +316,23 @@ export async function POST(request: NextRequest) {
     }, { status: 503 });
   }
 
-  // Rate limiting
-  if (aiRateLimiter) {
-    const ip = request.headers.get('x-forwarded-for') || 'anonymous';
-    const { success } = await aiRateLimiter.limit(ip);
-    if (!success) {
-      return NextResponse.json<APIResponse<null>>({
-        success: false,
-        error: {
-          code: 'RATE_LIMITED',
-          message: 'Too many requests. Please wait.',
-        },
-      }, { status: 429 });
+  // Rate limiting (optional)
+  if (aiRateLimiter && typeof aiRateLimiter.limit === 'function') {
+    try {
+      const ip = request.headers.get('x-forwarded-for') || 'anonymous';
+      const { success } = await aiRateLimiter.limit(ip);
+      if (!success) {
+        return NextResponse.json<APIResponse<null>>({
+          success: false,
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many requests. Please wait.',
+          },
+        }, { status: 429 });
+      }
+    } catch (rateLimitError) {
+      // Continue if rate limiting fails
+      console.warn('[AI Summary] Rate limiting error:', rateLimitError);
     }
   }
 
@@ -313,10 +351,22 @@ export async function POST(request: NextRequest) {
     }
 
     const { gameId, type, homeTeamAbbr, awayTeamAbbr, gameDate } = parsed.data;
-    logger.api.request('POST', '/api/ai/summary', { gameId, type, homeTeamAbbr, awayTeamAbbr, gameDate });
+    try {
+      logger.api.request('POST', '/api/ai/summary', { gameId, type, homeTeamAbbr, awayTeamAbbr, gameDate });
+    } catch (logError) {
+      console.log('[AI Summary] Request:', { gameId, type, homeTeamAbbr, awayTeamAbbr, gameDate });
+    }
 
     const cacheKey = getSummaryCacheKey({ gameId, type, homeTeamAbbr, awayTeamAbbr, gameDate });
-    const cached = await getCache<SummaryCacheEntry>(cacheKey);
+    let cached: SummaryCacheEntry | null = null;
+    if (getCache && typeof getCache === 'function') {
+      try {
+        const cacheResult = await getCache(cacheKey);
+        cached = cacheResult as SummaryCacheEntry | null;
+      } catch (cacheError) {
+        console.warn('[AI Summary] Cache read error:', cacheError);
+      }
+    }
     if (cached) {
       return NextResponse.json<APIResponse<{ summary: string; type: string }>>({
         success: true,
@@ -332,25 +382,33 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const dateRange = getDateRange(gameDate);
-    const teamFilters = homeTeamAbbr && awayTeamAbbr
-      ? [
-          buildTeamMatch(homeTeamAbbr, awayTeamAbbr, dateRange),
-          buildTeamMatch(awayTeamAbbr, homeTeamAbbr, dateRange),
-        ]
-      : [];
+    // Try database first, fallback to live data
+    let game: any = null;
+    if (prisma && prisma.game) {
+      try {
+        const dateRange = getDateRange(gameDate);
+        const teamFilters = homeTeamAbbr && awayTeamAbbr
+          ? [
+              buildTeamMatch(homeTeamAbbr, awayTeamAbbr, dateRange),
+              buildTeamMatch(awayTeamAbbr, homeTeamAbbr, dateRange),
+            ]
+          : [];
 
-    const game = await prisma.game.findFirst({
-      where: {
-        OR: [
-          { id: gameId },
-          { externalId: gameId },
-          ...teamFilters,
-        ],
-      },
-      orderBy: { scheduledAt: 'desc' },
-      include: { homeTeam: true, awayTeam: true },
-    });
+        game = await prisma.game.findFirst({
+          where: {
+            OR: [
+              { id: gameId },
+              { externalId: gameId },
+              ...teamFilters,
+            ],
+          },
+          orderBy: { scheduledAt: 'desc' },
+          include: { homeTeam: true, awayTeam: true },
+        });
+      } catch (dbError) {
+        console.warn('[AI Summary] Database query error:', dbError);
+      }
+    }
 
     if (!game) {
       const liveFallback = await buildContextFromLiveData({
@@ -376,12 +434,18 @@ export async function POST(request: NextRequest) {
           liveFallback.context.game.awayTeam
         );
 
-        await setCache(cacheKey, {
-          summary: response.text,
-          type,
-          model: response.model,
-          timestamp: new Date().toISOString(),
-        }, { ttl: getSummaryCacheTtl(type) });
+        if (setCache && typeof setCache === 'function') {
+          try {
+            await setCache(cacheKey, {
+              summary: response.text,
+              type,
+              model: response.model,
+              timestamp: new Date().toISOString(),
+            }, { ttl: getSummaryCacheTtl(type) });
+          } catch (cacheError) {
+            console.warn('[AI Summary] Cache write error:', cacheError);
+          }
+        }
 
         return NextResponse.json<APIResponse<{ summary: string; type: string }>>({
           success: true,
@@ -398,14 +462,20 @@ export async function POST(request: NextRequest) {
 
       const response = await generateGameSummary(liveFallback.context, type);
 
-      await setCache(cacheKey, {
-        summary: response.text,
-        type,
-        model: response.model,
-        timestamp: new Date().toISOString(),
-      }, { ttl: getSummaryCacheTtl(type) });
+        if (setCache && typeof setCache === 'function') {
+          try {
+            await setCache(cacheKey, {
+              summary: response.text,
+              type,
+              model: response.model,
+              timestamp: new Date().toISOString(),
+            }, { ttl: getSummaryCacheTtl(type) });
+          } catch (cacheError) {
+            console.warn('[AI Summary] Cache write error:', cacheError);
+          }
+        }
 
-      return NextResponse.json<APIResponse<{ summary: string; type: string }>>({
+        return NextResponse.json<APIResponse<{ summary: string; type: string }>>({
         success: true,
         data: {
           summary: response.text,
@@ -439,43 +509,56 @@ export async function POST(request: NextRequest) {
       response = await generateGameSummary(context, type);
     }
 
-    // Save to database
-    const summaryTypeMap = {
-      pregame: 'PREGAME_PREVIEW',
-      halftime: 'HALFTIME_REPORT',
-      final: 'FINAL_RECAP',
-    } as const;
+    // Save to database (optional)
+    if (prisma && prisma.aISummary) {
+      try {
+        const summaryTypeMap = {
+          pregame: 'PREGAME_PREVIEW',
+          halftime: 'HALFTIME_REPORT',
+          final: 'FINAL_RECAP',
+        } as const;
 
-    await prisma.aISummary.upsert({
-      where: {
-        gameId_summaryType: {
-          gameId,
-          summaryType: summaryTypeMap[type],
-        },
-      },
-      update: {
-        content: response.text,
-        modelUsed: response.model,
-        dataSnapshot: JSON.stringify({}),
-        promptUsed: type,
-        generatedAt: new Date(),
-      },
-      create: {
-        gameId,
-        summaryType: summaryTypeMap[type],
-        content: response.text,
-        modelUsed: response.model,
-        dataSnapshot: JSON.stringify({}),
-        promptUsed: type,
-      },
-    });
+        await prisma.aISummary.upsert({
+          where: {
+            gameId_summaryType: {
+              gameId,
+              summaryType: summaryTypeMap[type],
+            },
+          },
+          update: {
+            content: response.text,
+            modelUsed: response.model,
+            dataSnapshot: JSON.stringify({}),
+            promptUsed: type,
+            generatedAt: new Date(),
+          },
+          create: {
+            gameId,
+            summaryType: summaryTypeMap[type],
+            content: response.text,
+            modelUsed: response.model,
+            dataSnapshot: JSON.stringify({}),
+            promptUsed: type,
+          },
+        });
+      } catch (dbError) {
+        console.warn('[AI Summary] Database save error:', dbError);
+      }
+    }
 
-    await setCache(cacheKey, {
+    // Cache the result (optional)
+    if (setCache && typeof setCache === 'function') {
+      try {
+        await setCache(cacheKey, {
       summary: response.text,
       type,
       model: response.model,
       timestamp: new Date().toISOString(),
-    }, { ttl: getSummaryCacheTtl(type) });
+        }, { ttl: getSummaryCacheTtl(type) });
+      } catch (cacheError) {
+        console.warn('[AI Summary] Cache write error:', cacheError);
+      }
+    }
 
     return NextResponse.json<APIResponse<{ summary: string; type: string }>>({
       success: true,
@@ -489,13 +572,17 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    logger.api.error('POST', '/api/ai/summary', error as Error);
+    try {
+      logger.api.error('POST', '/api/ai/summary', error as Error);
+    } catch (logError) {
+      console.error('[AI Summary] Error:', error);
+    }
     
     return NextResponse.json<APIResponse<null>>({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Failed to generate summary',
+        message: error instanceof Error ? error.message : 'Failed to generate summary',
       },
     }, { status: 500 });
   }
