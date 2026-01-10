@@ -123,14 +123,14 @@ export function PlayerStatsTable({ players, teamColor = '333' }: PlayerStatsTabl
           </div>
         </td>
 
-        {/* Basic Stats */}
+        {/* Basic Stats - ensure no negative values (basketball stats are always >= 0) */}
         <td className="p-3 text-center text-white/60 text-sm">{player.minutes}</td>
-        <td className="p-3 text-center text-white font-semibold">{player.points}</td>
-        <td className="p-3 text-center text-white/80 text-sm">{player.rebounds}</td>
-        <td className="p-3 text-center text-white/80 text-sm">{player.assists}</td>
-        <td className="p-3 text-center text-white/60 text-sm">{player.steals}</td>
-        <td className="p-3 text-center text-white/60 text-sm">{player.blocks}</td>
-        <td className="p-3 text-center text-white/60 text-sm">{player.turnovers}</td>
+        <td className="p-3 text-center text-white font-semibold">{Math.max(0, player.points)}</td>
+        <td className="p-3 text-center text-white/80 text-sm">{Math.max(0, player.rebounds)}</td>
+        <td className="p-3 text-center text-white/80 text-sm">{Math.max(0, player.assists)}</td>
+        <td className="p-3 text-center text-white/60 text-sm">{Math.max(0, player.steals)}</td>
+        <td className="p-3 text-center text-white/60 text-sm">{Math.max(0, player.blocks)}</td>
+        <td className="p-3 text-center text-white/60 text-sm">{Math.max(0, player.turnovers)}</td>
 
         {/* Shooting */}
         <td className="p-3 text-center text-white/70 text-sm">

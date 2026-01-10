@@ -500,17 +500,128 @@ export async function fetchGameDetail(gameId: string): Promise<ESPNGameDetail | 
           return [parseInt(parts[0]) || 0, parseInt(parts[1]) || 0];
         };
         
-        const minutes = getStatByIndex(0);
-        const [fgm, fga] = parseShooting(getStatByIndex(1));
-        const [fg3m, fg3a] = parseShooting(getStatByIndex(2));
-        const [ftm, fta] = parseShooting(getStatByIndex(3));
-        const rebounds = parseInt(getStatByIndex(6)) || 0;
-        const assists = parseInt(getStatByIndex(7)) || 0;
-        const steals = parseInt(getStatByIndex(8)) || 0;
-        const blocks = parseInt(getStatByIndex(9)) || 0;
-        const turnovers = parseInt(getStatByIndex(10)) || 0;
-        const plusMinus = getStatByIndex(12);
-        const points = parseInt(getStatByIndex(13)) || 0;
+        // Try to find stats using labels first (more reliable than hardcoded indices)
+        // ESPN may return stats in different orders depending on the game/endpoint
+        const findStatByLabel = (labels: string[], targetLabels: string[]): number => {
+          for (const target of targetLabels) {
+            const idx = labels.findIndex(l => l?.toLowerCase() === target.toLowerCase());
+            if (idx !== -1 && Array.isArray(stats) && idx < stats.length) {
+              const val = parseInt(String(stats[idx])) || 0;
+              return val;
+            }
+          }
+          return -1; // Not found
+        };
+        
+        const findStatStrByLabel = (labels: string[], targetLabels: string[]): string => {
+          for (const target of targetLabels) {
+            const idx = labels.findIndex(l => l?.toLowerCase() === target.toLowerCase());
+            if (idx !== -1 && Array.isArray(stats) && idx < stats.length) {
+              return String(stats[idx] ?? '0');
+            }
+          }
+          return '0';
+        };
+        
+        // Get labels from the parent statistics object if available
+        const labels = statLabels.length > 0 ? statLabels : [];
+        
+        // Try label-based lookup first, fall back to index-based
+        let minutes = findStatStrByLabel(labels, ['MIN', 'MINS', 'Minutes']);
+        let points = findStatByLabel(labels, ['PTS', 'Points']);
+        let rebounds = findStatByLabel(labels, ['REB', 'Rebounds', 'TREB']);
+        let assists = findStatByLabel(labels, ['AST', 'Assists']);
+        let steals = findStatByLabel(labels, ['STL', 'Steals']);
+        let blocks = findStatByLabel(labels, ['BLK', 'Blocks']);
+        let turnovers = findStatByLabel(labels, ['TO', 'TOV', 'Turnovers']);
+        let plusMinusVal = findStatStrByLabel(labels, ['+/-', 'PLUSMINUS', 'PM']);
+        let fgStr = findStatStrByLabel(labels, ['FG', 'Field Goals']);
+        let fg3Str = findStatStrByLabel(labels, ['3PT', '3P', 'Three Pointers']);
+        let ftStr = findStatStrByLabel(labels, ['FT', 'Free Throws']);
+        
+        // Fallback to index-based if label lookup failed
+        if (minutes === '0' && Array.isArray(stats) && stats.length > 0) {
+          minutes = getStatByIndex(0);
+        }
+        
+        // For index-based fallback, we need to be smart about detecting +/- vs PTS
+        // Since +/- can be negative but PTS cannot, we can use this to detect mix-ups
+        let rawIndex13 = 0;
+        let rawIndex12 = 0;
+        if (Array.isArray(stats) && stats.length > 13) {
+          rawIndex13 = parseInt(String(stats[13])) || 0;
+          rawIndex12 = parseInt(String(stats[12])) || 0;
+        }
+        
+        if (points === -1) {
+          // Standard order: index 12 = +/-, index 13 = PTS
+          // But if index 13 is negative, it's likely +/- and we need to find PTS elsewhere
+          if (rawIndex13 < 0) {
+            // Index 13 has a negative value, so it's probably +/-
+            // Try index 12 for points, or recalculate from FG + FT
+            points = rawIndex12 >= 0 ? rawIndex12 : 0;
+            // And use index 13 as +/-
+            if (plusMinusVal === '0') {
+              plusMinusVal = String(rawIndex13);
+            }
+          } else {
+            points = rawIndex13;
+          }
+        }
+        if (rebounds === -1) {
+          rebounds = parseInt(getStatByIndex(6)) || 0;
+        }
+        if (assists === -1) {
+          assists = parseInt(getStatByIndex(7)) || 0;
+        }
+        if (steals === -1) {
+          steals = parseInt(getStatByIndex(8)) || 0;
+        }
+        if (blocks === -1) {
+          blocks = parseInt(getStatByIndex(9)) || 0;
+        }
+        if (turnovers === -1) {
+          turnovers = parseInt(getStatByIndex(10)) || 0;
+        }
+        if (plusMinusVal === '0' && Array.isArray(stats) && stats.length > 12) {
+          // Only use index 12 if we haven't already assigned +/- from detecting a swap
+          plusMinusVal = getStatByIndex(12);
+        }
+        if (fgStr === '0') {
+          fgStr = getStatByIndex(1);
+        }
+        if (fg3Str === '0') {
+          fg3Str = getStatByIndex(2);
+        }
+        if (ftStr === '0') {
+          ftStr = getStatByIndex(3);
+        }
+        
+        const [fgm, fga] = parseShooting(fgStr);
+        const [fg3m, fg3a] = parseShooting(fg3Str);
+        const [ftm, fta] = parseShooting(ftStr);
+        let plusMinus = plusMinusVal;
+        
+        // If points is still negative after all our checks, that value is definitely +/-
+        // Swap it: use that value as +/- and calculate points from FG + FT
+        if (points < 0) {
+          // This negative "points" is actually +/-
+          plusMinus = String(points);
+          // Calculate actual points from field goals and free throws
+          // Points = (FGM * 2) + (FG3M * 1) + FTM  ... wait that's wrong
+          // Actually: Points = (FGM - FG3M) * 2 + FG3M * 3 + FTM
+          // Or simpler: Try to find it by looking for a reasonable value in the array
+          points = (fgm - fg3m) * 2 + fg3m * 3 + ftm;
+        }
+        
+        // CRITICAL VALIDATION: Points, rebounds, assists, etc. can NEVER be negative
+        // These are counting stats that must be >= 0
+        points = Math.max(0, points);
+        rebounds = Math.max(0, rebounds);
+        assists = Math.max(0, assists);
+        steals = Math.max(0, steals);
+        blocks = Math.max(0, blocks);
+        turnovers = Math.max(0, turnovers);
         
         // Calculate percentages
         const fgPct = fga > 0 ? ((fgm / fga) * 100).toFixed(1) : '0.0';

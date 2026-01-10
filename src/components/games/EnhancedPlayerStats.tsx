@@ -269,15 +269,15 @@ export function EnhancedPlayerStats({
                       {viewMode === 'game' || viewMode === 'comparison' ? (
                         <>
                           <div className="text-center">
-                            <p className="text-lg font-bold text-white">{player.points}</p>
+                            <p className="text-lg font-bold text-white">{Math.max(0, player.points)}</p>
                             <p className="text-[10px] text-white/40 uppercase">PTS</p>
                           </div>
                           <div className="text-center">
-                            <p className="text-lg font-bold text-white/80">{player.rebounds}</p>
+                            <p className="text-lg font-bold text-white/80">{Math.max(0, player.rebounds)}</p>
                             <p className="text-[10px] text-white/40 uppercase">REB</p>
                           </div>
                           <div className="text-center">
-                            <p className="text-lg font-bold text-white/80">{player.assists}</p>
+                            <p className="text-lg font-bold text-white/80">{Math.max(0, player.assists)}</p>
                             <p className="text-[10px] text-white/40 uppercase">AST</p>
                           </div>
                         </>
@@ -395,12 +395,12 @@ export function EnhancedPlayerStats({
                     /* Game Stats View */
                     <div className="mt-4 grid grid-cols-3 gap-3">
                       <StatBox label="MIN" value={player.minutes} />
-                      <StatBox label="PTS" value={player.points.toString()} highlight />
-                      <StatBox label="REB" value={player.rebounds.toString()} />
-                      <StatBox label="AST" value={player.assists.toString()} />
-                      <StatBox label="STL" value={player.steals.toString()} />
-                      <StatBox label="BLK" value={player.blocks.toString()} />
-                      <StatBox label="TO" value={player.turnovers.toString()} />
+                      <StatBox label="PTS" value={Math.max(0, player.points).toString()} highlight />
+                      <StatBox label="REB" value={Math.max(0, player.rebounds).toString()} />
+                      <StatBox label="AST" value={Math.max(0, player.assists).toString()} />
+                      <StatBox label="STL" value={Math.max(0, player.steals).toString()} />
+                      <StatBox label="BLK" value={Math.max(0, player.blocks).toString()} />
+                      <StatBox label="TO" value={Math.max(0, player.turnovers).toString()} />
                       <StatBox label="FG" value={`${player.fgm}-${player.fga}`} subtext={player.fgPct} />
                       <StatBox label="3PT" value={`${player.fg3m}-${player.fg3a}`} subtext={player.fg3Pct} />
                       <StatBox label="FT" value={`${player.ftm}-${player.fta}`} subtext={player.ftPct} />

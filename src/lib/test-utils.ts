@@ -108,3 +108,4 @@ export function truncateForPreview(text: string, maxLength: number = 80): string
   return text.slice(0, maxLength).trim() + '...';
 }
 
+

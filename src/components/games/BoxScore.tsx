@@ -90,13 +90,13 @@ function TeamBoxScore({ stats, teamName }: TeamBoxScoreProps) {
                   {stat.minutes || '-'}
                 </td>
                 <td className="text-center py-2 px-2 text-white font-semibold">
-                  {stat.points}
+                  {Math.max(0, stat.points)}
                 </td>
                 <td className="text-center py-2 px-2 text-white/90">
-                  {stat.rebounds}
+                  {Math.max(0, stat.rebounds)}
                 </td>
                 <td className="text-center py-2 px-2 text-white/90">
-                  {stat.assists}
+                  {Math.max(0, stat.assists)}
                 </td>
                 <td className="text-center py-2 px-2 text-white/70">
                   <span>{stat.fgm}-{stat.fga}</span>
@@ -113,13 +113,13 @@ function TeamBoxScore({ stats, teamName }: TeamBoxScoreProps) {
                   {stat.ftm}-{stat.fta}
                 </td>
                 <td className="text-center py-2 px-2 text-white/70">
-                  {stat.steals}
+                  {Math.max(0, stat.steals)}
                 </td>
                 <td className="text-center py-2 px-2 text-white/70">
-                  {stat.blocks}
+                  {Math.max(0, stat.blocks)}
                 </td>
                 <td className="text-center py-2 px-2 text-white/70">
-                  {stat.turnovers}
+                  {Math.max(0, stat.turnovers)}
                 </td>
                 <td
                   className={cn(
