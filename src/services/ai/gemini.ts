@@ -12,7 +12,7 @@ export interface ChatResponse {
 }
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL_NAME = 'gemini-2.5-pro';
+const MODEL_NAME = 'gemini-2.0-flash';
 
 let ai: GoogleGenAI | null = null;
 if (GEMINI_API_KEY) {
@@ -102,7 +102,7 @@ export async function generateGameSummary(
 
   try {
     const { game, homeLeaders, awayLeaders, recentPlays } = context;
-    
+
     let prompt = `Generate a ${type === 'halftime' ? 'halftime report' : 'game recap'} for ${game.awayTeam} @ ${game.homeTeam}.
 
 Score: ${game.awayTeam} ${game.awayScore} - ${game.homeScore} ${game.homeTeam}
