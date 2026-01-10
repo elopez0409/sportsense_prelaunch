@@ -62,10 +62,12 @@ Provide:
 
 Keep it engaging, insightful, and informative.`;
 
-    const response = await ai.models.generateContent({
+    const requestParams: any = {
       model: MODEL_NAME,
       contents: prompt,
-    });
+    };
+
+    const response = await ai.models.generateContent(requestParams);
 
     const text = (response as any).text || (response as any).response?.text || (response as any).content || '';
 
@@ -125,10 +127,12 @@ ${type === 'final' ? '- Final thoughts and context' : ''}
 
 Keep it engaging, insightful, and informative.`;
 
-    const response = await ai.models.generateContent({
+    const requestParams: any = {
       model: MODEL_NAME,
       contents: prompt,
-    });
+    };
+
+    const response = await ai.models.generateContent(requestParams);
 
     const text = (response as any).text || (response as any).response?.text || (response as any).content || '';
 
