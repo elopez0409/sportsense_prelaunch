@@ -297,7 +297,7 @@ const NBA_TEAMS: Record<string, { id: string; name: string; abbreviation: string
 // ============================================
 
 type UserIntent =
-  | { type: 'games'; filter?: 'live' | 'today' | 'upcoming' | 'team' | 'date'; team?: string; date?: string; dateDisplay?: string }
+  | { type: 'games'; filter?: 'live' | 'today' | 'upcoming' | 'team' | 'date' | 'recentGames'; team?: string; date?: string; dateDisplay?: string; isRecap?: boolean }
   | { type: 'specificGame'; gameId: string } // New: for queries about specific game IDs
   | { type: 'standings'; conference?: 'east' | 'west' | 'both' }
   | { type: 'player'; name: string; season?: number; seasonDisplay?: string }
@@ -449,20 +449,18 @@ function detectUserIntent(message: string): UserIntent {
     }
   }
 
-  // Check for known player names directly
-  for (const [nickname, fullName] of Object.entries(PLAYER_NAME_MAP)) {
-    if (lowerMsg.includes(nickname)) {
-      return { type: 'player', name: fullName, season: extractedSeason, seasonDisplay };
-    }
-  }
-
-  // Check for game recap queries (e.g., "recap of lakers game last week", "lakers game recap")
-  // This should come BEFORE general game detection to catch specific recap requests
+  // Check for game recap queries FIRST - this must come BEFORE player name search
+  // to prevent "recap of pistons game" from matching a player named "piston" or similar
+  // Note: Patterns must handle "of the [team]" correctly - "the" should be optional, not captured as team
   const recapPatterns = [
-    /(?:recap|summary|summary of|recap of|tell me about|what happened in)\s+(?:the\s+)?(\w+)\s+(?:game|match|matchup)(?:\s+(?:last|next|this)\s+(?:week|month|day|tuesday|monday|wednesday|thursday|friday|saturday|sunday))?/i,
-    /(\w+)\s+(?:game|match|matchup)\s+(?:recap|summary|from)\s+(?:last|next|this)?\s*(?:week|month|day)?/i,
-    /(?:recap|summary)\s+(?:of|the)\s+(\w+)\s+(?:game|match)/i,
-    /give\s+me\s+(?:a\s+)?(?:recap|summary)\s+(?:of|the)\s+(\w+)\s+(?:game|match)/i,
+    // "recap of the pistons game", "recap of pistons game", "tell me about the lakers game"
+    /(?:recap|summary|summary of|recap of|tell me about|what happened in)\s+(?:the\s+)?(?:today'?s?\s+)?(\w+)\s+(?:game|match|matchup)(?:\s+(?:last|next|this)\s+(?:week|month|day|tuesday|monday|wednesday|thursday|friday|saturday|sunday))?/i,
+    // "pistons game recap", "lakers game summary"
+    /(\w+)\s+(?:game|match|matchup)\s+(?:recap|summary|from)\s*(?:last|next|this)?\s*(?:week|month|day)?/i,
+    // "recap of the pistons game" - handle "of the" as a unit
+    /(?:recap|summary)\s+of\s+(?:the\s+)?(?:today'?s?\s+)?(\w+)\s+(?:game|match)/i,
+    // "give me a recap of the pistons game"
+    /give\s+me\s+(?:a\s+)?(?:recap|summary)\s+of\s+(?:the\s+)?(?:today'?s?\s+)?(\w+)\s+(?:game|match)/i,
   ];
 
   for (const pattern of recapPatterns) {
@@ -476,9 +474,14 @@ function detectUserIntent(message: string): UserIntent {
       );
 
       if (team) {
-        // Extract date from message
+        // Extract date from message, but ignore "today" if it appears as part of "today's" 
+        // to avoid matching "recap of today's pistons game" as a today-only search
         const dateMatch = extractDateFromMessage(message);
-        if (dateMatch) {
+        
+        // Check if this is a "today's game" query - should still search recent if no game today
+        const isTodaysQuery = /today'?s?\s+\w+\s+game/i.test(message);
+        
+        if (dateMatch && !isTodaysQuery) {
           console.log(`[Intent] Detected recap query for ${team.abbreviation} on ${dateMatch.displayString}`);
           return {
             type: 'games',
@@ -486,25 +489,32 @@ function detectUserIntent(message: string): UserIntent {
             team: team.abbreviation,
             date: dateMatch.dateString,
             dateDisplay: dateMatch.displayString,
+            isRecap: true,
           };
         }
-        // If no specific date, search for recent games (last 7 days)
-        console.log(`[Intent] Detected recap query for ${team.abbreviation} (no date specified, searching last 7 days)`);
-        const lastWeekDate = parseNaturalDate('last week');
-        if (lastWeekDate) {
-          return {
-            type: 'games',
-            filter: 'date',
-            team: team.abbreviation,
-            date: lastWeekDate.dateString,
-            dateDisplay: lastWeekDate.displayString,
-          };
-        }
+        
+        // For recap queries without a specific date (or "today's game" queries),
+        // use recentGames filter to search the last 7 days and find the most recent game
+        console.log(`[Intent] Detected recap query for ${team.abbreviation} (searching recent games)`);
         return {
           type: 'games',
-          filter: 'team',
+          filter: 'recentGames',
           team: team.abbreviation,
+          dateDisplay: 'Recent',
+          isRecap: true,
         };
+      }
+    }
+  }
+
+  // Check for known player names directly
+  // IMPORTANT: Skip this check if the message contains game-related keywords to prevent
+  // player intent from overriding game recap queries (e.g., if a player nickname appears in team name)
+  const isGameRelatedQuery = /\b(game|match|matchup|recap|summary|score|played|playing)\b/i.test(message);
+  if (!isGameRelatedQuery) {
+    for (const [nickname, fullName] of Object.entries(PLAYER_NAME_MAP)) {
+      if (lowerMsg.includes(nickname)) {
+        return { type: 'player', name: fullName, season: extractedSeason, seasonDisplay };
       }
     }
   }
@@ -895,13 +905,18 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
         } else if (intent.filter === 'date' && intent.dateDisplay) {
           // Games are already filtered by date from the API call
           dateDisplay = intent.dateDisplay;
+        } else if (intent.filter === 'recentGames' && intent.team) {
+          // Games are already filtered by team and sorted by date from the API call
+          dateDisplay = intent.isRecap ? `${intent.team} Recap` : 'Recent';
         } else {
           // Default to today
           dateDisplay = 'Today';
         }
 
         // For future dates, allow empty games array (Gemini will populate it)
-        if (games.length === 0 && !isFutureDateQuery) return null;
+        // For recentGames (recap) queries, allow empty if no games found - we'll show a message
+        const isRecentGamesQuery = intent.filter === 'recentGames';
+        if (games.length === 0 && !isFutureDateQuery && !isRecentGamesQuery) return null;
 
         const gamesResponse: AIVisualResponse = {
           type: 'games',
@@ -1496,6 +1511,77 @@ export async function POST(request: Request) {
           console.log(`[AI Chat] No completed games found, building context without boxscores`);
           liveContext = buildAIContext(liveData, []);
         }
+      }
+      // Handle recap queries - search recent games (last 7 days) for the team
+      else if (intent.type === 'games' && intent.filter === 'recentGames' && intent.team) {
+        console.log(`[AI Chat] Searching recent games for ${intent.team} (last 7 days)`);
+
+        // Search the last 7 days for games involving this team
+        const today = new Date();
+        const allGames: LiveGameData[] = [];
+        
+        for (let i = 0; i < 7; i++) {
+          const searchDate = new Date(today);
+          searchDate.setDate(searchDate.getDate() - i);
+          const dateStr = searchDate.toISOString().split('T')[0].replace(/-/g, '');
+          
+          try {
+            const dateData = await fetchScoresByDate(dateStr);
+            // Filter to only include games for the specified team
+            const teamGames = dateData.games.filter(g =>
+              g.homeTeam.abbreviation === intent.team ||
+              g.awayTeam.abbreviation === intent.team
+            );
+            allGames.push(...teamGames);
+          } catch (error) {
+            // Continue if one date fails
+            continue;
+          }
+        }
+
+        // Sort games by date (most recent first) and find completed games
+        const completedGames = allGames.filter(g => g.status === 'final');
+        
+        if (completedGames.length > 0) {
+          // Use the most recent completed game for recap
+          const mostRecentGame = completedGames[0]; // Already sorted by date (most recent first)
+          console.log(`[AI Chat] Found ${completedGames.length} completed games for ${intent.team}, using most recent: ${mostRecentGame.gameId}`);
+          
+          liveData = {
+            games: [mostRecentGame],
+            lastUpdated: new Date().toISOString(),
+            source: 'ESPN API',
+            sourceUrl: 'https://www.espn.com/nba/',
+          };
+          
+          // Fetch boxscore for the most recent game
+          const boxscores = await fetchAllBoxscores([mostRecentGame]);
+          liveContext = buildAIContext(liveData, boxscores);
+          
+          dateContext = `\n\nRECAP CONTEXT: User asked for a recap of ${intent.team}'s game. Found their most recent completed game. Provide a detailed recap with key moments, top performers, and analysis.\n`;
+        } else if (allGames.length > 0) {
+          // Found scheduled/live games but no completed ones
+          console.log(`[AI Chat] Found ${allGames.length} games for ${intent.team}, but none completed yet`);
+          liveData = {
+            games: allGames,
+            lastUpdated: new Date().toISOString(),
+            source: 'ESPN API',
+            sourceUrl: 'https://www.espn.com/nba/',
+          };
+          liveContext = buildAIContext(liveData, []);
+          dateContext = `\n\nRECAP CONTEXT: User asked for a recap of ${intent.team}'s game, but their recent games haven't finished yet. Show them the current status of their upcoming/live games.\n`;
+        } else {
+          // No games found in last 7 days
+          console.log(`[AI Chat] No games found for ${intent.team} in the last 7 days`);
+          liveData = {
+            games: [],
+            lastUpdated: new Date().toISOString(),
+            source: 'ESPN API',
+            sourceUrl: 'https://www.espn.com/nba/',
+          };
+          liveContext = `No ${intent.team} games found in the last 7 days.`;
+          dateContext = `\n\nRECAP CONTEXT: User asked for a recap of ${intent.team}'s game, but no games were found in the last 7 days. Let the user know and suggest checking the team's schedule.\n`;
+        }
       } else {
         // Default: fetch today's live data
         console.log('[AI Chat] Fetching live NBA data and boxscores...');
@@ -1532,8 +1618,9 @@ export async function POST(request: Request) {
               (parseNaturalDate(intent.date || '')?.isFuture ?? false));
 
           if (visualResponse.data.length === 0 && isFutureQuery) {
-            visualContext = `\n\nVISUAL DATA BEING SHOWN TO USER:\nThe API returned 0 games for this future date (${intent.dateDisplay || intent.date}), but the user will see a games grid.\n\n`;
-            visualContext += `**CRITICAL: This is a FUTURE DATE query. The user asked about games on ${intent.dateDisplay || intent.date}.\n`;
+            const dateDisplayValue = intent.type === 'games' ? (intent.dateDisplay || intent.date) : '';
+            visualContext = `\n\nVISUAL DATA BEING SHOWN TO USER:\nThe API returned 0 games for this future date (${dateDisplayValue}), but the user will see a games grid.\n\n`;
+            visualContext += `**CRITICAL: This is a FUTURE DATE query. The user asked about games on ${dateDisplayValue}.\n`;
             visualContext += `You MUST use your knowledge of NBA schedules to answer. The NBA plays games almost daily during the regular season.\n`;
             visualContext += `Even if the API shows 0 games, you have knowledge of scheduled games, fixtures, and typical NBA schedule patterns.\n\n`;
             visualContext += `**YOU MUST PROVIDE THE GAME DATA IN JSON FORMAT** so the visual can be updated correctly.\n`;
@@ -1583,8 +1670,10 @@ export async function POST(request: Request) {
           visualContext += `CRITICAL: The user is asking about ${requestedSeason}. These ESPN stats may be incorrect, outdated, or from the wrong season. `;
           visualContext += `Use your extensive knowledge base to provide the CORRECT stats for ${p.name} for ${requestedSeason}. `;
           visualContext += `You MUST include the accurate stats at the very end of your response in this exact JSON format (no other text after the JSON):\n\n`;
-          visualContext += `\`\`\`json\n{"correctedStats": {"ppg": 30.0, "rpg": 7.9, "apg": 7.2, "spg": 1.8, "bpg": 1.1, "mpg": 40.4, "fgPct": 48.4, "fg3Pct": 31.5, "ftPct": 71.2, "gamesPlayed": 75}, "team": "Cleveland Cavaliers"}\n\`\`\`\n\n`;
-          visualContext += `IMPORTANT: Include the "team" field in the JSON with the correct team name for ${requestedSeason}. `;
+          // Use the player's actual name and current team as a template to avoid AI copying wrong example data
+          visualContext += `\`\`\`json\n{"correctedStats": {"ppg": <correct_ppg>, "rpg": <correct_rpg>, "apg": <correct_apg>, "spg": <correct_spg>, "bpg": <correct_bpg>, "mpg": <correct_mpg>, "fgPct": <correct_fg_pct>, "fg3Pct": <correct_3pt_pct>, "ftPct": <correct_ft_pct>, "gamesPlayed": <games_played>}, "team": "<correct_team_for_${requestedSeason}>"}\n\`\`\`\n\n`;
+          visualContext += `IMPORTANT: Replace all <placeholders> with actual numeric values for ${p.name}. `;
+          visualContext += `Include the "team" field with ${p.name}'s CORRECT team for ${requestedSeason} (NOT a placeholder). `;
           visualContext += `ALWAYS provide correctedStats JSON - use your knowledge base to provide accurate stats for the requested season. `;
           visualContext += `The corrected stats and team will automatically update the player card if provided.`;
           break;
@@ -1896,7 +1985,7 @@ If the user asked about a specific date, acknowledge that date and reference gam
                 const [homeWins, homeLosses] = homeRecord.split('-').map((n: string) => parseInt(n) || 0);
 
                 return {
-                  gameId: `${game.awayTeam}-${game.homeTeam}-${intent.date || ''}`,
+                  gameId: `${game.awayTeam}-${game.homeTeam}-${intent.type === 'games' ? intent.date || '' : ''}`,
                   awayTeam: {
                     name: awayTeamData.name,
                     abbreviation: awayTeamData.abbreviation,
@@ -1920,7 +2009,7 @@ If the user asked about a specific date, acknowledge that date and reference gam
               if (scheduledGames.length > 0) {
                 // Update visual response with Gemini's scheduled games
                 visualResponse.data = scheduledGames;
-                visualResponse.dateDisplay = intent.dateDisplay;
+                visualResponse.dateDisplay = intent.type === 'games' ? intent.dateDisplay : undefined;
 
                 console.log(`[AI Chat] Updated visual with ${scheduledGames.length} games from Gemini's knowledge:`,
                   scheduledGames.map(g => `${g.awayTeam.abbreviation} @ ${g.homeTeam.abbreviation}`)

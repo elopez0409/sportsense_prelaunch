@@ -25,18 +25,19 @@ export function parseNaturalDate(input: string, referenceDate: Date = new Date()
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   
-  // Handle "today"
-  if (normalized.includes('today') || normalized === 'today') {
+  // Handle "today" - require word boundary to avoid matching "today's" as just "today"
+  // Use regex with word boundaries to ensure we match whole words
+  if (/\btoday\b/.test(normalized)) {
     return createParsedDate(today, 'Today');
   }
   
-  // Handle "tomorrow"
-  if (normalized.includes('tomorrow') || normalized === 'tomorrow') {
+  // Handle "tomorrow" - require word boundary
+  if (/\btomorrow\b/.test(normalized)) {
     return createParsedDate(tomorrow, 'Tomorrow');
   }
   
-  // Handle "yesterday"
-  if (normalized.includes('yesterday') || normalized === 'yesterday') {
+  // Handle "yesterday" - require word boundary
+  if (/\byesterday\b/.test(normalized)) {
     return createParsedDate(yesterday, 'Yesterday');
   }
   
@@ -200,14 +201,15 @@ export function parseNaturalDate(input: string, referenceDate: Date = new Date()
  */
 export function extractDateFromMessage(message: string): ParsedDate | null {
   // Common date patterns in questions
+  // Note: Use word boundaries (\b) for standalone words to avoid matching "today" in "today's"
   const dateKeywords = [
-    /(today|tomorrow|yesterday)/i,
-    /(last|next)\s+week/i, // "last week" or "next week"
-    /(last|next|this|past)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)/i,
-    /(next|last|in|ago)\s+\d+\s+(day|days|week|weeks)/i,
-    /(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}/i,
-    /\d{1,2}[-/]\d{1,2}(?:[-/]\d{2,4})?/,
-    /\d{4}[-/]\d{1,2}[-/]\d{1,2}/,
+    /\b(today|tomorrow|yesterday)\b/i, // Word boundaries to avoid matching "today's", "todays", etc.
+    /\b(last|next)\s+week\b/i, // "last week" or "next week"
+    /\b(last|next|this|past)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/i,
+    /\b(next|last|in|ago)\s+\d+\s+(day|days|week|weeks)\b/i,
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\b/i,
+    /\b\d{1,2}[-/]\d{1,2}(?:[-/]\d{2,4})?\b/,
+    /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/,
   ];
   
   for (const pattern of dateKeywords) {
