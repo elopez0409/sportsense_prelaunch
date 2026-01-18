@@ -342,9 +342,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Monitor for live game updates with AI-enhanced notifications
+  // LAZY LOADING: Only fetch AI insights when a game TRANSITIONS to final/halftime
+  // NOT when page loads and games are already in that state
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
+    let isFirstPoll = true; // Track first poll to skip already-finished games
+    
     const gameStates = new Map<string, { 
+      lastStatus: string;
       lastScore: { home: number; away: number };
       notifiedFinal: boolean;
       notifiedHalftime: boolean;
@@ -361,16 +366,34 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         const games = data.games || [];
 
         for (const game of games) {
-          const state = gameStates.get(game.gameId) || {
-            lastScore: { home: 0, away: 0 },
+          const prevState = gameStates.get(game.gameId);
+          const state = prevState || {
+            lastStatus: game.status, // Initialize with current status
+            lastScore: { home: game.homeTeam.score || 0, away: game.awayTeam.score || 0 },
             notifiedFinal: false,
             notifiedHalftime: false,
             notifiedCloseGame: false,
             fetchingAI: false,
           };
 
-          // Check for halftime with AI insight
-          if (game.status === 'halftime' && !state.notifiedHalftime && !state.fetchingAI) {
+          // LAZY LOADING: Skip notifications on first poll if game is already final/halftime
+          // This prevents burst API calls when page loads with many finished games
+          if (isFirstPoll) {
+            if (game.status === 'final') {
+              state.notifiedFinal = true; // Mark as already notified
+            }
+            if (game.status === 'halftime') {
+              state.notifiedHalftime = true;
+            }
+            gameStates.set(game.gameId, state);
+            continue;
+          }
+
+          // Only trigger notifications when status CHANGES (not on first load)
+          const statusChanged = prevState && prevState.lastStatus !== game.status;
+
+          // Check for halftime with AI insight (only on status change)
+          if (game.status === 'halftime' && statusChanged && !state.notifiedHalftime && !state.fetchingAI) {
             state.notifiedHalftime = true;
             state.fetchingAI = true;
             gameStates.set(game.gameId, state);
@@ -401,8 +424,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             });
           }
 
-          // Check for final with AI insight
-          if (game.status === 'final' && !state.notifiedFinal && !state.fetchingAI) {
+          // Check for final with AI insight (only on status change)
+          if (game.status === 'final' && statusChanged && !state.notifiedFinal && !state.fetchingAI) {
             state.notifiedFinal = true;
             state.fetchingAI = true;
             gameStates.set(game.gameId, state);
@@ -451,16 +474,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 homeScore: game.homeTeam.score,
                 awayScore: game.awayTeam.score,
                 gameDate: game.gameDate,
-                hasAIInsight: true, // Can view live insights
+                hasAIInsight: true, // Can view live insights on-demand
               });
               state.notifiedCloseGame = true;
             }
           }
 
           // Update state
+          state.lastStatus = game.status;
           state.lastScore = { home: game.homeTeam.score, away: game.awayTeam.score };
           gameStates.set(game.gameId, state);
         }
+        
+        isFirstPoll = false; // After first poll, start tracking status changes
       } catch (error) {
         console.error('Failed to check for game updates:', error);
       }

@@ -141,11 +141,20 @@ Write 3-4 sentences: score summary, top performer, key moment, one insight. NO h
       model: MODEL_NAME,
     };
   } catch (error) {
+    // Log the full error for debugging
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[Gemini] generateGameSummary FAILED:', errorMessage);
+    
+    // Check if it's a rate limit error
+    if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
+      console.error('[Gemini] ⚠️ RATE LIMITED - Wait 30-60 seconds');
+    }
+    
     logger.error('Failed to generate game summary', error instanceof Error ? { message: error.message, stack: error.stack } : { error: String(error) });
     return {
       text: `Failed to generate ${type === 'halftime' ? 'halftime' : 'final'} summary.`,
       model: MODEL_NAME,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMessage,
     };
   }
 }
