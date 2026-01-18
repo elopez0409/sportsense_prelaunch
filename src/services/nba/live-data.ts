@@ -1097,8 +1097,10 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
           turnovers: Math.max(0, p.turnovers),
         });
         
-        lines.push(`\n  === ${game.awayTeam.abbreviation} INDIVIDUAL PLAYER STATS ===`);
-        gameBoxscore.awayPlayers.slice(0, 8).forEach(rawP => {
+        // Limit to top 6 players per team to reduce context size (was 8)
+        // This reduces token count by ~25% while keeping key performers
+        lines.push(`\n  === ${game.awayTeam.abbreviation} INDIVIDUAL PLAYER STATS (Top 6) ===`);
+        gameBoxscore.awayPlayers.slice(0, 6).forEach(rawP => {
           const p = safeStats(rawP);
           const fgPct = p.fga > 0 ? ((p.fgm / p.fga) * 100).toFixed(1) : '0.0';
           const fg3Pct = p.fg3a > 0 ? ((p.fg3m / p.fg3a) * 100).toFixed(1) : '0.0';
@@ -1107,8 +1109,8 @@ export function buildAIContext(data: LiveDataResponse, boxscores?: GameBoxscore[
           lines.push(`    ${p.name}: ${p.points}pts, ${p.rebounds}reb, ${p.assists}ast, ${p.steals}stl, ${p.blocks}blk, ${p.fgm}/${p.fga} FG (${fgPct}%), ${p.fg3m}/${p.fg3a} 3PT (${fg3Pct}%), ${p.minutes} min, +/- ${plusMinusFormatted}`);
         });
         
-        lines.push(`\n  === ${game.homeTeam.abbreviation} INDIVIDUAL PLAYER STATS ===`);
-        gameBoxscore.homePlayers.slice(0, 8).forEach(rawP => {
+        lines.push(`\n  === ${game.homeTeam.abbreviation} INDIVIDUAL PLAYER STATS (Top 6) ===`);
+        gameBoxscore.homePlayers.slice(0, 6).forEach(rawP => {
           const p = safeStats(rawP);
           const fgPct = p.fga > 0 ? ((p.fgm / p.fga) * 100).toFixed(1) : '0.0';
           const fg3Pct = p.fg3a > 0 ? ((p.fg3m / p.fg3a) * 100).toFixed(1) : '0.0';

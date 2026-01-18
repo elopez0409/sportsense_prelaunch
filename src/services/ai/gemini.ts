@@ -45,6 +45,14 @@ export function isAIAvailable(): boolean {
   return !!ai && !!GEMINI_API_KEY;
 }
 
+// Generation config for concise responses
+const GENERATION_CONFIG = {
+  maxOutputTokens: 150,  // ~3-4 sentences max
+  temperature: 0.5,
+  topK: 40,
+  topP: 0.9,
+};
+
 /**
  * Generate a pregame preview
  */
@@ -62,22 +70,15 @@ export async function generatePregamePreview(
   }
 
   try {
-    const prompt = `Generate an engaging NBA pregame preview for ${awayTeam} @ ${homeTeam}.
-
+    const prompt = `${awayTeam} @ ${homeTeam} pregame preview.
 ${additionalContext || ''}
 
-Provide:
-- Key matchup details
-- Recent team performance trends
-- Players to watch
-- Potential storylines
-- Prediction or key factors
-
-Keep it engaging, insightful, and informative.`;
+Write 2-3 sentences: key matchup, player to watch, prediction. NO headers, NO bullets.`;
 
     const requestParams: any = {
       model: MODEL_NAME,
       contents: prompt,
+      generationConfig: GENERATION_CONFIG,
     };
 
     const response = await ai.models.generateContent(requestParams);
@@ -114,35 +115,21 @@ export async function generateGameSummary(
   }
 
   try {
-    const { game, homeLeaders, awayLeaders, recentPlays } = context;
+    const { game, homeLeaders, awayLeaders } = context;
 
-    let prompt = `Generate a ${type === 'halftime' ? 'halftime report' : 'game recap'} for ${game.awayTeam} @ ${game.homeTeam}.
+    // Build compact data string
+    const homeTop = homeLeaders.points ? `${homeLeaders.points.player} ${homeLeaders.points.value}pts` : '';
+    const awayTop = awayLeaders.points ? `${awayLeaders.points.player} ${awayLeaders.points.value}pts` : '';
 
-Score: ${game.awayTeam} ${game.awayScore} - ${game.homeScore} ${game.homeTeam}
-${game.period ? `Period: ${game.period}${game.gameClock ? ` (${game.gameClock})` : ''}` : ''}
-${game.venue ? `Venue: ${game.venue}` : ''}
+    const prompt = `${game.awayTeam} ${game.awayScore}, ${game.homeTeam} ${game.homeScore} (${type === 'halftime' ? 'Halftime' : 'Final'})
+Top: ${awayTop} | ${homeTop}
 
-Top Performers:
-${homeLeaders.points ? `${game.homeTeam} - Points: ${homeLeaders.points.player} (${homeLeaders.points.value})` : ''}
-${homeLeaders.rebounds ? `${game.homeTeam} - Rebounds: ${homeLeaders.rebounds.player} (${homeLeaders.rebounds.value})` : ''}
-${homeLeaders.assists ? `${game.homeTeam} - Assists: ${homeLeaders.assists.player} (${homeLeaders.assists.value})` : ''}
-${awayLeaders.points ? `${game.awayTeam} - Points: ${awayLeaders.points.player} (${awayLeaders.points.value})` : ''}
-${awayLeaders.rebounds ? `${game.awayTeam} - Rebounds: ${awayLeaders.rebounds.player} (${awayLeaders.rebounds.value})` : ''}
-${awayLeaders.assists ? `${game.awayTeam} - Assists: ${awayLeaders.assists.player} (${awayLeaders.assists.value})` : ''}
-
-${recentPlays.length > 0 ? `Recent Plays:\n${recentPlays.slice(0, 5).map(p => `- ${p.description} (${p.scoreAfter})`).join('\n')}` : ''}
-
-Provide:
-${type === 'halftime' ? '- First half analysis\n- Key moments and turning points\n- Half-time adjustments needed' : '- Complete game recap\n- Key moments and turning points\n- Final analysis and takeaways'}
-- Top performers analysis
-- What decided the game (or first half)
-${type === 'final' ? '- Final thoughts and context' : ''}
-
-Keep it engaging, insightful, and informative.`;
+Write 3-4 sentences: score summary, top performer, key moment, one insight. NO headers, NO bullets, NO sections. Plain paragraph only.`;
 
     const requestParams: any = {
       model: MODEL_NAME,
       contents: prompt,
+      generationConfig: GENERATION_CONFIG,
     };
 
     const response = await ai.models.generateContent(requestParams);
