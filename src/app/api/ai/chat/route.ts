@@ -180,9 +180,50 @@ interface PlayerComparisonVisual {
   }>;
 }
 
+// Game recap player type for top player comparison
+interface GameRecapTopPlayer {
+  name: string;
+  headshot?: string;
+  minutes: string;
+  points: number;
+  rebounds: number;
+  assists: number;
+  fg3m: number;
+  fg3a: number;
+  fgm?: number;
+  fga?: number;
+  plusMinus?: string;
+}
+
+// Game recap visual with side-by-side top player comparison
+interface GameRecapVisual {
+  gameId: string;
+  homeTeam: {
+    name: string;
+    abbreviation: string;
+    logo: string;
+    score: number;
+    record?: string;
+    topPlayers: GameRecapTopPlayer[];
+  };
+  awayTeam: {
+    name: string;
+    abbreviation: string;
+    logo: string;
+    score: number;
+    record?: string;
+    topPlayers: GameRecapTopPlayer[];
+  };
+  status: 'scheduled' | 'live' | 'halftime' | 'final';
+  venue?: string;
+  broadcast?: string;
+  date?: string;
+}
+
 type AIVisualResponse =
   | { type: 'games'; data: VisualGameData[]; dateDisplay?: string }
   | { type: 'game'; data: VisualGameData }
+  | { type: 'gameRecap'; data: GameRecapVisual }
   | { type: 'player'; data: VisualPlayerData }
   | { type: 'players'; data: VisualPlayerData[] }
   | { type: 'standings'; data: VisualStandingsData[] }
@@ -461,6 +502,8 @@ function detectUserIntent(message: string): UserIntent {
     /(?:recap|summary)\s+of\s+(?:the\s+)?(?:today'?s?\s+)?(\w+)\s+(?:game|match)/i,
     // "give me a recap of the pistons game"
     /give\s+me\s+(?:a\s+)?(?:recap|summary)\s+of\s+(?:the\s+)?(?:today'?s?\s+)?(\w+)\s+(?:game|match)/i,
+    // "recap of the cavs", "recap of the lakers" - without "game" word
+    /(?:recap|summary)\s+(?:of\s+)?(?:the\s+)?(\w+)$/i,
   ];
 
   for (const pattern of recapPatterns) {
@@ -917,6 +960,77 @@ async function generateVisualResponse(intent: UserIntent, liveData: any): Promis
         // For recentGames (recap) queries, allow empty if no games found - we'll show a message
         const isRecentGamesQuery = intent.filter === 'recentGames';
         if (games.length === 0 && !isFutureDateQuery && !isRecentGamesQuery) return null;
+
+        // NEW: For recap queries with a completed game, return gameRecap with top player comparison
+        if (intent.isRecap && games.length > 0 && games[0].status === 'final') {
+          const game = games[0];
+          // Fetch boxscore for the game to get top players
+          const boxscore = await fetchGameBoxscore(game.gameId);
+          
+          if (boxscore) {
+            // Get top 3 players by points from each team
+            const sortByPoints = (players: any[]) => 
+              [...players]
+                .filter(p => p.minutes && p.minutes !== '0' && p.minutes !== '0:00')
+                .sort((a, b) => b.points - a.points)
+                .slice(0, 3);
+            
+            const homeTopPlayers = sortByPoints(boxscore.homePlayers).map(p => ({
+              name: p.name,
+              headshot: p.headshot || `https://a.espncdn.com/i/headshots/nba/players/full/${p.playerId || 0}.png`,
+              minutes: p.minutes,
+              points: Math.max(0, p.points),
+              rebounds: Math.max(0, p.rebounds),
+              assists: Math.max(0, p.assists),
+              fg3m: Math.max(0, p.fg3m),
+              fg3a: Math.max(0, p.fg3a),
+              fgm: Math.max(0, p.fgm),
+              fga: Math.max(0, p.fga),
+              plusMinus: p.plusMinus,
+            }));
+            
+            const awayTopPlayers = sortByPoints(boxscore.awayPlayers).map(p => ({
+              name: p.name,
+              headshot: p.headshot || `https://a.espncdn.com/i/headshots/nba/players/full/${p.playerId || 0}.png`,
+              minutes: p.minutes,
+              points: Math.max(0, p.points),
+              rebounds: Math.max(0, p.rebounds),
+              assists: Math.max(0, p.assists),
+              fg3m: Math.max(0, p.fg3m),
+              fg3a: Math.max(0, p.fg3a),
+              fgm: Math.max(0, p.fgm),
+              fga: Math.max(0, p.fga),
+              plusMinus: p.plusMinus,
+            }));
+            
+            return {
+              type: 'gameRecap',
+              data: {
+                gameId: game.gameId,
+                homeTeam: {
+                  name: game.homeTeam.name,
+                  abbreviation: game.homeTeam.abbreviation,
+                  logo: `https://a.espncdn.com/i/teamlogos/nba/500/${game.homeTeam.abbreviation.toLowerCase()}.png`,
+                  score: game.homeTeam.score,
+                  record: game.homeTeam.record,
+                  topPlayers: homeTopPlayers,
+                },
+                awayTeam: {
+                  name: game.awayTeam.name,
+                  abbreviation: game.awayTeam.abbreviation,
+                  logo: `https://a.espncdn.com/i/teamlogos/nba/500/${game.awayTeam.abbreviation.toLowerCase()}.png`,
+                  score: game.awayTeam.score,
+                  record: game.awayTeam.record,
+                  topPlayers: awayTopPlayers,
+                },
+                status: 'final',
+                venue: game.venue,
+                broadcast: game.broadcast,
+                date: game.gameDate,
+              },
+            };
+          }
+        }
 
         const gamesResponse: AIVisualResponse = {
           type: 'games',

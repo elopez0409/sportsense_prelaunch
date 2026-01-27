@@ -11,6 +11,7 @@ import {
   Activity, Clock, MapPin, Tv, ChevronRight, Users, BarChart3,
   Zap, Star, AlertTriangle, CheckCircle, Calendar
 } from 'lucide-react';
+import { TopPlayerComparison } from './TopPlayerComparison';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -126,12 +127,52 @@ export interface VisualLeadersData {
 export type AIVisualResponse = 
   | { type: 'games'; data: VisualGameData[]; dateDisplay?: string }
   | { type: 'game'; data: VisualGameData }
+  | { type: 'gameRecap'; data: GameRecapVisual } // NEW: Game recap with top player comparison
   | { type: 'player'; data: VisualPlayerData }
   | { type: 'players'; data: VisualPlayerData[] }
   | { type: 'standings'; data: VisualStandingsData[] }
   | { type: 'statsTable'; data: VisualStatsTable }
   | { type: 'leaders'; data: VisualLeadersData }
   | { type: 'comparison'; data: PlayerComparisonVisual };
+
+// NEW: Game recap with top player comparison (per mock requirements)
+export interface GameRecapTopPlayer {
+  name: string;
+  headshot?: string;
+  minutes: string;
+  points: number;
+  rebounds: number;
+  assists: number;
+  fg3m: number;
+  fg3a: number;
+  fgm?: number;
+  fga?: number;
+  plusMinus?: string;
+}
+
+export interface GameRecapVisual {
+  gameId: string;
+  homeTeam: {
+    name: string;
+    abbreviation: string;
+    logo: string;
+    score: number;
+    record?: string;
+    topPlayers: GameRecapTopPlayer[];
+  };
+  awayTeam: {
+    name: string;
+    abbreviation: string;
+    logo: string;
+    score: number;
+    record?: string;
+    topPlayers: GameRecapTopPlayer[];
+  };
+  status: 'scheduled' | 'live' | 'halftime' | 'final';
+  venue?: string;
+  broadcast?: string;
+  date?: string;
+}
 
 export interface PlayerComparisonVisual {
   player1: VisualPlayerData;
@@ -929,6 +970,28 @@ export function AIVisualRenderer({ visual }: { visual: AIVisualResponse }) {
       return <GamesGrid games={visual.data} dateDisplay={visual.dateDisplay} />;
     case 'game':
       return <GameCard game={visual.data} />;
+    case 'gameRecap':
+      // NEW: Game recap with side-by-side top player comparison
+      return (
+        <TopPlayerComparison
+          gameId={visual.data.gameId}
+          homeTeam={{
+            name: visual.data.homeTeam.name,
+            abbreviation: visual.data.homeTeam.abbreviation,
+            score: visual.data.homeTeam.score,
+            logo: visual.data.homeTeam.logo,
+            topPlayers: visual.data.homeTeam.topPlayers,
+          }}
+          awayTeam={{
+            name: visual.data.awayTeam.name,
+            abbreviation: visual.data.awayTeam.abbreviation,
+            score: visual.data.awayTeam.score,
+            logo: visual.data.awayTeam.logo,
+            topPlayers: visual.data.awayTeam.topPlayers,
+          }}
+          status={visual.data.status}
+        />
+      );
     case 'player':
       return <PlayerCard player={visual.data} />;
     case 'players':

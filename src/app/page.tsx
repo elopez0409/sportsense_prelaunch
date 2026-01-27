@@ -152,10 +152,10 @@ export default function HubPage() {
           </div>
 
           <nav className="hidden md:flex items-center gap-6">
-            <Link href="/calendar" className="text-white/60 hover:text-white text-sm font-medium transition-colors">
+            <Link href="/nba/calendar" className="text-white/60 hover:text-white text-sm font-medium transition-colors">
               Calendar
             </Link>
-            <Link href="/standings" className="text-white/60 hover:text-white text-sm font-medium transition-colors">
+            <Link href="/nba/standings" className="text-white/60 hover:text-white text-sm font-medium transition-colors">
               Standings
             </Link>
           </nav>
@@ -210,20 +210,20 @@ export default function HubPage() {
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 animate-slide-up" style={{ animationDelay: '0.3s' }}>
           <QuickAction
             icon={Calendar}
-            label="Full Calendar"
-            href="/calendar"
+            label="NBA Calendar"
+            href="/nba/calendar"
             color="bg-blue-500/20"
           />
           <QuickAction
             icon={TrendingUp}
-            label="Live Standings"
-            href="/standings"
+            label="NBA Standings"
+            href="/nba/standings"
             color="bg-green-500/20"
           />
           <QuickAction
             icon={Star}
-            label="My Teams"
-            href="/favorites"
+            label="NBA Teams"
+            href="/nba/teams"
             color="bg-yellow-500/20"
           />
         </div>

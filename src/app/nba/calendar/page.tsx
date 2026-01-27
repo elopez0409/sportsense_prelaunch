@@ -1,16 +1,18 @@
-// NBA Calendar Page - Full Month Calendar View (Google Calendar Style)
+// NBA Calendar Page - Week and Month Calendar Views
+// Default: Shows the previous 7 days with clear date headers
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { ChevronLeft, ChevronRight, Calendar, ExternalLink } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, ExternalLink, LayoutGrid, List } from 'lucide-react';
 import { NBAHeader } from '@/components/nba/NBAHeader';
 import { fetchScoresByDate, fetchScoresForDateRange, type LiveGameData } from '@/services/nba/live-data';
+import { WeekView, type WeekViewGame } from '@/components/calendar/WeekView';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 300; // Cache for 5 minutes since calendar data doesn't change frequently
 
 interface PageProps {
-  searchParams: Promise<{ month?: string; year?: string }>;
+  searchParams: Promise<{ month?: string; year?: string; view?: 'week' | 'month' }>;
 }
 
 interface GameWithDate extends LiveGameData {
@@ -175,45 +177,61 @@ function DayCell({
 export default async function NBACalendarPage({ searchParams }: PageProps) {
   const params = await searchParams;
   
+  // Get view mode (default to 'week' per requirements)
+  const view = params.view || 'week';
+  
   // Get current date or from params
   const today = new Date();
   const year = params.year ? parseInt(params.year) : today.getFullYear();
   const month = params.month ? parseInt(params.month) - 1 : today.getMonth(); // 0-indexed
   
-  // Calculate month boundaries
-  const firstDayOfMonth = new Date(year, month, 1);
-  const lastDayOfMonth = new Date(year, month + 1, 0);
-  
-  // Get all days to display
-  const calendarDays = getMonthDays(year, month);
-  
-  // Fetch games for the entire month
-  const allGames: GameWithDate[] = [];
-  
-  // Fetch games for each day that's visible in the calendar
-  const startDate = calendarDays[0];
-  const endDate = calendarDays[calendarDays.length - 1];
-  
-  // Batch fetch by fetching one week at a time
-  const promises: Promise<void>[] = [];
+  // Calculate date ranges based on view
   const gamesByDate = new Map<string, LiveGameData[]>();
   
-  // We'll fetch games day by day for accuracy (ESPN API doesn't support date ranges well)
-  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().split('T')[0].replace(/-/g, '');
-    const dateKey = d.toISOString().split('T')[0];
+  if (view === 'week') {
+    // Fetch last 7 days for week view
+    const weekPromises: Promise<void>[] = [];
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0].replace(/-/g, '');
+      const dateKey = date.toISOString().split('T')[0];
+      
+      weekPromises.push(
+        fetchScoresByDate(dateStr).then(({ games }) => {
+          gamesByDate.set(dateKey, games);
+        }).catch(() => {
+          gamesByDate.set(dateKey, []);
+        })
+      );
+    }
+    await Promise.all(weekPromises);
+  } else {
+    // Calculate month boundaries for month view
+    const calendarDays = getMonthDays(year, month);
+    const startDate = calendarDays[0];
+    const endDate = calendarDays[calendarDays.length - 1];
     
-    promises.push(
-      fetchScoresByDate(dateStr).then(({ games }) => {
-        gamesByDate.set(dateKey, games);
-      }).catch(() => {
-        gamesByDate.set(dateKey, []);
-      })
-    );
+    // Fetch games for each day in the month
+    const monthPromises: Promise<void>[] = [];
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0].replace(/-/g, '');
+      const dateKey = d.toISOString().split('T')[0];
+      
+      monthPromises.push(
+        fetchScoresByDate(dateStr).then(({ games }) => {
+          gamesByDate.set(dateKey, games);
+        }).catch(() => {
+          gamesByDate.set(dateKey, []);
+        })
+      );
+    }
+    await Promise.all(monthPromises);
   }
   
-  // Wait for all fetches (with a reasonable timeout approach - fetch in batches)
-  await Promise.all(promises);
+  // Calculate month boundaries for header/navigation
+  const firstDayOfMonth = new Date(year, month, 1);
+  const calendarDays = getMonthDays(year, month);
   
   // Navigation
   const prevMonth = month === 0 ? 12 : month;
@@ -224,12 +242,27 @@ export default async function NBACalendarPage({ searchParams }: PageProps) {
   const monthName = firstDayOfMonth.toLocaleDateString('en-US', { month: 'long' });
   const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  // Count total games this month
+  // Count total games
   let totalGames = 0;
   let liveGames = 0;
   gamesByDate.forEach((games) => {
     totalGames += games.length;
     liveGames += games.filter(g => g.status === 'live' || g.status === 'halftime').length;
+  });
+  
+  // Convert Map to Record for WeekView component
+  const gamesByDateRecord: Record<string, WeekViewGame[]> = {};
+  gamesByDate.forEach((games, key) => {
+    gamesByDateRecord[key] = games.map(g => ({
+      gameId: g.gameId,
+      homeTeam: g.homeTeam,
+      awayTeam: g.awayTeam,
+      status: g.status,
+      venue: g.venue,
+      broadcast: g.broadcast,
+      clock: g.clock,
+      period: g.period,
+    }));
   });
 
   return (
@@ -250,9 +283,11 @@ export default async function NBACalendarPage({ searchParams }: PageProps) {
           <div className="flex items-center gap-4">
             <Calendar className="w-10 h-10 text-orange-400" />
             <div>
-              <h1 className="text-3xl font-bold text-white">{monthName} {year}</h1>
+              <h1 className="text-3xl font-bold text-white">
+                {view === 'week' ? 'This Week' : `${monthName} ${year}`}
+              </h1>
               <p className="text-white/60 text-sm">
-                {totalGames} games this month
+                {totalGames} games {view === 'week' ? 'this week' : 'this month'}
                 {liveGames > 0 && (
                   <span className="ml-2 text-red-400">• {liveGames} LIVE</span>
                 )}
@@ -260,82 +295,122 @@ export default async function NBACalendarPage({ searchParams }: PageProps) {
             </div>
           </div>
           
-          {/* Month Navigation */}
-          <div className="flex items-center gap-2">
-            <Link
-              href={`/nba/calendar?month=${prevMonth}&year=${prevYear}`}
-              className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </Link>
+          {/* View Toggle + Navigation */}
+          <div className="flex items-center gap-3">
+            {/* View Toggle */}
+            <div className="flex items-center bg-white/5 rounded-lg p-1">
+              <Link
+                href="/nba/calendar?view=week"
+                className={`p-2 rounded-md flex items-center gap-1.5 text-sm transition-colors ${
+                  view === 'week' 
+                    ? 'bg-orange-500/20 text-orange-400' 
+                    : 'text-white/60 hover:text-white'
+                }`}
+              >
+                <List className="w-4 h-4" />
+                Week
+              </Link>
+              <Link
+                href={`/nba/calendar?view=month&month=${month + 1}&year=${year}`}
+                className={`p-2 rounded-md flex items-center gap-1.5 text-sm transition-colors ${
+                  view === 'month' 
+                    ? 'bg-orange-500/20 text-orange-400' 
+                    : 'text-white/60 hover:text-white'
+                }`}
+              >
+                <LayoutGrid className="w-4 h-4" />
+                Month
+              </Link>
+            </div>
             
-            <Link
-              href="/nba/calendar"
-              className="px-4 py-2 rounded-lg bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 font-medium text-sm transition-colors"
-            >
-              Today
-            </Link>
-            
-            <Link
-              href={`/nba/calendar?month=${nextMonth}&year=${nextYear}`}
-              className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </Link>
-          </div>
-        </div>
-
-        {/* Calendar Grid */}
-        <div className="glass rounded-2xl overflow-hidden">
-          {/* Week Day Headers */}
-          <div className="grid grid-cols-7 bg-white/5 border-b border-white/10">
-            {weekDays.map(day => (
-              <div key={day} className="p-3 text-center">
-                <span className="text-sm font-medium text-white/60">{day}</span>
+            {/* Month Navigation (only for month view) */}
+            {view === 'month' && (
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/nba/calendar?view=month&month=${prevMonth}&year=${prevYear}`}
+                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </Link>
+                
+                <Link
+                  href="/nba/calendar?view=month"
+                  className="px-4 py-2 rounded-lg bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 font-medium text-sm transition-colors"
+                >
+                  Today
+                </Link>
+                
+                <Link
+                  href={`/nba/calendar?view=month&month=${nextMonth}&year=${nextYear}`}
+                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </Link>
               </div>
-            ))}
-          </div>
-          
-          {/* Calendar Days */}
-          <div className="grid grid-cols-7">
-            {calendarDays.map((date, idx) => {
-              const dateKey = formatDateKey(date);
-              const games = gamesByDate.get(dateKey) || [];
-              const isCurrentMonth = date.getMonth() === month;
-              const isToday = formatDateKey(date) === formatDateKey(today);
-              
-              return (
-                <DayCell 
-                  key={idx}
-                  date={date}
-                  games={games}
-                  isCurrentMonth={isCurrentMonth}
-                  isToday={isToday}
-                />
-              );
-            })}
+            )}
           </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap items-center justify-center gap-6 mt-6 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-red-500/30 border border-red-500/50"></div>
-            <span className="text-white/60">Live</span>
+        {/* Week View (default) */}
+        {view === 'week' && (
+          <WeekView gamesByDate={gamesByDateRecord} />
+        )}
+
+        {/* Month Calendar Grid */}
+        {view === 'month' && (
+          <div className="glass rounded-2xl overflow-hidden">
+            {/* Week Day Headers */}
+            <div className="grid grid-cols-7 bg-white/5 border-b border-white/10">
+              {weekDays.map(day => (
+                <div key={day} className="p-3 text-center">
+                  <span className="text-sm font-medium text-white/60">{day}</span>
+                </div>
+              ))}
+            </div>
+            
+            {/* Calendar Days */}
+            <div className="grid grid-cols-7">
+              {calendarDays.map((date, idx) => {
+                const dateKey = formatDateKey(date);
+                const games = gamesByDate.get(dateKey) || [];
+                const isCurrentMonth = date.getMonth() === month;
+                const isToday = formatDateKey(date) === formatDateKey(today);
+                
+                return (
+                  <DayCell 
+                    key={idx}
+                    date={date}
+                    games={games}
+                    isCurrentMonth={isCurrentMonth}
+                    isToday={isToday}
+                  />
+                );
+              })}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-blue-500/20"></div>
-            <span className="text-white/60">Scheduled</span>
+        )}
+
+        {/* Legend (month view only) */}
+        {view === 'month' && (
+          <div className="flex flex-wrap items-center justify-center gap-6 mt-6 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded bg-red-500/30 border border-red-500/50"></div>
+              <span className="text-white/60">Live</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded bg-blue-500/20"></div>
+              <span className="text-white/60">Scheduled</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded bg-white/10"></div>
+              <span className="text-white/60">Final</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded ring-2 ring-orange-500/50"></div>
+              <span className="text-white/60">Today</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-white/10"></div>
-            <span className="text-white/60">Final</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded ring-2 ring-orange-500/50"></div>
-            <span className="text-white/60">Today</span>
-          </div>
-        </div>
+        )}
 
         {/* Source Footer */}
         <div className="mt-8 text-center">

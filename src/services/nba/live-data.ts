@@ -815,8 +815,10 @@ export async function fetchAllLiveData(): Promise<LiveDataResponse> {
 // ============================================
 
 export interface PlayerBoxscoreStats {
+  playerId: string;
   name: string;
   team: string;
+  headshot: string;
   minutes: string;
   points: number;
   rebounds: number;
@@ -912,6 +914,9 @@ export async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | 
           return String(stats[idx] ?? defaultVal);
         };
         
+        // Extract player ID for headshot URL
+        const playerId = p.athlete?.id || p.id || '';
+        
         // Extract player name - try multiple paths to ensure accuracy
         const playerName = p.athlete?.displayName || 
                           p.athlete?.fullName || 
@@ -919,6 +924,11 @@ export async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | 
                           p.fullName || 
                           p.name || 
                           'Unknown';
+        
+        // Construct headshot URL using player ID
+        const headshot = playerId 
+          ? `https://a.espncdn.com/i/headshots/nba/players/full/${playerId}.png`
+          : '';
         
         // Get stats using label-based indices
         const minutes = getStatByIndex(minIdx);
@@ -945,8 +955,10 @@ export async function fetchGameBoxscore(gameId: string): Promise<GameBoxscore | 
         turnovers = Math.max(0, turnovers);
         
         return {
+          playerId: String(playerId),
           name: playerName,
           team: teamAbbr,
+          headshot,
           minutes,
           points,
           rebounds,

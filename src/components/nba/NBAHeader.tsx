@@ -10,6 +10,7 @@ import { useState } from 'react';
 
 const navItems = [
   { href: '/nba', label: 'Games' },
+  { href: '/nba/calendar', label: 'Calendar' },
   { href: '/nba/teams', label: 'Teams' },
   { href: '/nba/players', label: 'Players' },
   { href: '/nba/standings', label: 'Standings' },
