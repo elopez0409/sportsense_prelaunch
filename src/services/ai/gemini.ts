@@ -48,9 +48,9 @@ export function isAIAvailable(): boolean {
 // Generation config for concise responses
 const GENERATION_CONFIG = {
   maxOutputTokens: 150,  // ~3-4 sentences max
-  temperature: 0.5,
+  temperature: 0.2, // Lower temperature to reduce creative drift/hallucinations
   topK: 40,
-  topP: 0.9,
+  topP: 0.8,
 };
 
 /**
@@ -138,11 +138,22 @@ export async function generateGameSummary(
     const prompt = `${game.awayTeam} ${game.awayScore}, ${game.homeTeam} ${game.homeScore} (${type === 'halftime' ? 'Halftime' : 'Final'})
 Top scorers: ${awayTop} | ${homeTop}${benchContext}${inactiveContext}
 
+FACTS (USE ONLY THESE FACTS; do not add or infer anything else):
+- Score: ${game.awayTeam} ${game.awayScore}, ${game.homeTeam} ${game.homeScore}
+- Top scorers: ${awayTop || 'Not available'} | ${homeTop || 'Not available'}
+- Bench contributors: ${benchScoring && benchScoring.length > 0 ? benchScoring.map(b => `${b.player} ${b.points}pts`).join(', ') : 'None provided'}
+- Did not play: ${inactivePlayers && inactivePlayers.length > 0 ? inactivePlayers.map(p => p.player).join(', ') : 'None provided'}
+
 Write 3-4 sentences covering:
 1. Final score and game flow
 2. Top performer(s) and their impact
 3. Notable bench contributions if any players stepped up off the bench
 4. If key players were out, mention how the team adjusted or the context of the result
+
+STRICT RULES:
+- Use ONLY the FACTS above. Do NOT add stats, names, or details not listed.
+- If a fact is missing, say "Not available" rather than guessing.
+- First sentence must include the score AND (if provided) bench contributors or key absences.
 
 Write as a professional sports recap like ESPN or The Athletic. NO headers, NO bullets, NO sections. Plain paragraph only.`;
 
